@@ -11,11 +11,14 @@
 #include "settings.h"
 #include "ui_internal.h"
 #include "zello_client.h"
+#if CONFIG_ZELLO_BOARD_TDECK
+#include "input_tdeck.h"
+#endif
 
 #define REFRESH_MS 200
 
 static lv_obj_t *s_scr, *s_username, *s_channel, *s_status, *s_web, *s_log;
-static lv_obj_t *s_volume_value, *s_meter, *s_talk, *s_talk_label;
+static lv_obj_t *s_meter, *s_talk, *s_talk_label;
 static lv_timer_t *s_timer;
 static char s_log_cache[ZELLO_LOG_MAX];
 static char s_status_cache[160];
@@ -34,8 +37,9 @@ static void channels_clicked(lv_event_t *e)
 
 void ui_home_refresh_account(void)
 {
-    if (!s_username) return;
-    lv_label_set_text(s_username, g_settings.username[0] ? g_settings.username : "Not signed in");
+    if (!s_channel) return;
+    // The landscape layout has no room for the username.
+    if (s_username) lv_label_set_text(s_username, g_settings.username[0] ? g_settings.username : "Not signed in");
     lv_label_set_text_fmt(s_channel, LV_SYMBOL_LIST "  %s",
                           g_settings.channel[0] ? g_settings.channel : "No channel yet");
 }
@@ -43,6 +47,14 @@ void ui_home_refresh_account(void)
 // ---- talk button -----------------------------------------------------------
 
 static char s_talk_cache[96];
+
+// The talk button's second line. It spans the full width in landscape, so
+// there it follows on the same line.
+#if UI_LANDSCAPE
+#define TALK_SEP "  -  "
+#else
+#define TALK_SEP "\n"
+#endif
 
 static void set_talk(lv_color_t color, const char *text)
 {
@@ -70,6 +82,8 @@ static void talk_event(lv_event_t *e)
     }
 }
 
+// The volume value label rides in the event's user data, so the row can sit
+// on any screen.
 static void volume_event(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
@@ -77,10 +91,54 @@ static void volume_event(lv_event_t *e)
         int volume = lv_slider_get_value(lv_event_get_target(e));
         g_settings.volume = volume;
         audio_set_volume(volume);
-        lv_label_set_text_fmt(s_volume_value, "%d%%", volume);
-    } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+        lv_label_set_text_fmt(lv_event_get_user_data(e), "%d%%", volume);
+        // A keypad step is a whole change: let it be heard. A drag beeps once,
+        // when it is let go.
+        if (!lv_obj_has_state(lv_event_get_target(e), LV_STATE_PRESSED)) audio_beep();
+    } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST || code == LV_EVENT_DEFOCUSED) {
+        // Released a drag, or (keypad) moved on after stepping it.
+        if (code != LV_EVENT_DEFOCUSED) audio_beep();
         settings_save();
     }
+}
+
+// A borderless, transparent flex row.
+static lv_obj_t *plain_row(lv_obj_t *parent)
+{
+    lv_obj_t *row = lv_obj_create(parent);
+    lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(row, 0, 0);
+    lv_obj_set_style_pad_column(row, UI_GAP, 0);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(row, 0, 0);
+    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    return row;
+}
+
+// The speaker volume slider with its icon and value, saved as it changes.
+static lv_obj_t *ui_volume_row(lv_obj_t *parent)
+{
+    lv_obj_t *volume_row = plain_row(parent);
+    lv_obj_set_height(volume_row, UI_FIELD_H);
+    lv_obj_t *volume_icon = lv_label_create(volume_row);
+    lv_label_set_text(volume_icon, LV_SYMBOL_VOLUME_MAX);
+    lv_obj_set_style_text_font(volume_icon, UI_FONT, 0);
+    lv_obj_set_style_text_color(volume_icon, UI_COLOR_MUTED, 0);
+    lv_obj_t *volume = lv_slider_create(volume_row);
+    lv_slider_set_range(volume, 0, 100);
+    lv_slider_set_value(volume, g_settings.volume, LV_ANIM_OFF);
+    lv_obj_set_height(volume, UI_SLIDER_H);
+    lv_obj_set_flex_grow(volume, 1);
+    lv_obj_t *value = lv_label_create(volume_row);
+    lv_label_set_text_fmt(value, "%u%%", g_settings.volume);
+    lv_obj_set_width(value, UI_VOLUME_VALUE_W);
+    lv_obj_set_style_text_font(value, UI_FONT_SMALL, 0);
+    lv_obj_set_style_text_color(value, UI_COLOR_MUTED, 0);
+    lv_obj_set_style_text_align(value, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_add_event_cb(volume, volume_event, LV_EVENT_ALL, value);
+    return volume_row;
 }
 
 // ---- periodic refresh ------------------------------------------------------
@@ -141,13 +199,12 @@ static void refresh(lv_timer_t *t)
     if (st.state != ZELLO_ONLINE) {
         set_talk(UI_COLOR_PANEL, LV_SYMBOL_AUDIO "  OFFLINE");
     } else if (st.ptt) {
-        set_talk(UI_COLOR_GO_LIT, LV_SYMBOL_AUDIO "  TRANSMITTING\n"
-                 "release to listen");
+        set_talk(UI_COLOR_GO_LIT, LV_SYMBOL_AUDIO "  TRANSMITTING" TALK_SEP "release to listen");
     } else if (st.starting) {
         set_talk(UI_COLOR_WARN, LV_SYMBOL_AUDIO "  STARTING...");
     } else if (st.receiving) {
         char label[96];
-        snprintf(label, sizeof(label), LV_SYMBOL_VOLUME_MAX "  %s\nis talking", st.talker);
+        snprintf(label, sizeof(label), LV_SYMBOL_VOLUME_MAX "  %s" TALK_SEP "is talking", st.talker);
         set_talk(UI_COLOR_STOP, label);
     } else {
         set_talk(UI_COLOR_GO, g_settings.ptt_latch ? LV_SYMBOL_AUDIO "  TAP TO TALK"
@@ -171,6 +228,7 @@ static void refresh(lv_timer_t *t)
 
 // ---- screen ----------------------------------------------------------------
 
+#if !UI_LANDSCAPE
 static lv_obj_t *icon_button(lv_obj_t *parent, const char *text, lv_event_cb_t cb)
 {
     lv_obj_t *b = ui_button(parent, text, UI_COLOR_PANEL, cb, NULL);
@@ -180,6 +238,18 @@ static lv_obj_t *icon_button(lv_obj_t *parent, const char *text, lv_event_cb_t c
     lv_obj_set_flex_grow(b, 1);
     return b;
 }
+#endif
+
+// The level meter: the mic while transmitting, the speaker otherwise.
+static void meter_create(lv_obj_t *parent)
+{
+    s_meter = lv_bar_create(parent);
+    lv_obj_set_size(s_meter, LV_PCT(100), UI_METER_H);
+    lv_bar_set_range(s_meter, 0, 100);
+    lv_bar_set_value(s_meter, 0, LV_ANIM_OFF);
+    lv_obj_set_style_radius(s_meter, UI_METER_H / 2, 0);
+    lv_obj_set_style_bg_color(s_meter, UI_COLOR_PANEL, 0);
+}
 
 void ui_home_show(void)
 {
@@ -187,22 +257,36 @@ void ui_home_show(void)
         lv_obj_t *col = ui_screen_create(&s_scr, NULL);
         lv_obj_remove_flag(col, LV_OBJ_FLAG_SCROLLABLE);
 
+#if UI_LANDSCAPE
+        // One header row: the channel, then Channels and Settings as icon
+        // buttons, leaving the right-hand end to the status bar.
+        lv_obj_t *header = plain_row(col);
+        lv_obj_set_style_pad_right(header, UI_STATUS_BAR_W, 0);
+        s_channel = ui_label(header, "", UI_FONT, UI_COLOR_ACCENT);
+        lv_obj_set_width(s_channel, 0);
+        lv_obj_set_flex_grow(s_channel, 1);
+        lv_label_set_long_mode(s_channel, LV_LABEL_LONG_DOT);
+        for (int i = 0; i < 2; i++) {
+            lv_obj_t *b = ui_button(header, i ? LV_SYMBOL_SETTINGS : LV_SYMBOL_LIST, UI_COLOR_PANEL,
+                                    i ? settings_clicked : channels_clicked, NULL);
+            lv_obj_set_size(b, UI_EDIT_BUTTON_H + UI_PAD, UI_EDIT_BUTTON_H);
+        }
+
+        s_status = ui_label(col, "", UI_FONT_SMALL, UI_COLOR_MUTED);
+        lv_label_set_long_mode(s_status, LV_LABEL_LONG_DOT);
+        s_web = ui_label(col, "", UI_FONT_SMALL, UI_COLOR_MUTED);
+        lv_label_set_long_mode(s_web, LV_LABEL_LONG_DOT);
+#else
         s_username = ui_title(col, "");
         s_channel = ui_label(col, "", UI_FONT, UI_COLOR_ACCENT);
 
-        lv_obj_t *buttons = lv_obj_create(col);
-        lv_obj_set_size(buttons, LV_PCT(100), LV_SIZE_CONTENT);
-        lv_obj_set_flex_flow(buttons, LV_FLEX_FLOW_ROW);
-        lv_obj_set_style_pad_all(buttons, 0, 0);
-        lv_obj_set_style_pad_column(buttons, UI_GAP, 0);
-        lv_obj_set_style_bg_opa(buttons, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_width(buttons, 0, 0);
-        lv_obj_remove_flag(buttons, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_t *buttons = plain_row(col);
         icon_button(buttons, LV_SYMBOL_LIST "  Channels", channels_clicked);
         icon_button(buttons, LV_SYMBOL_SETTINGS "  Settings", settings_clicked);
 
         s_status = ui_label(col, "", UI_FONT_SMALL, UI_COLOR_MUTED);
         s_web = ui_label(col, "", UI_FONT_SMALL, UI_COLOR_MUTED);
+#endif
 
         // Channel activity: talkers, text messages and errors.
         lv_obj_t *box = lv_obj_create(col);
@@ -215,38 +299,19 @@ void ui_home_show(void)
         lv_obj_set_scroll_dir(box, LV_DIR_VER);
         s_log = ui_label(box, "Channel activity shows up here.", UI_FONT_SMALL, UI_COLOR_MUTED);
 
-        lv_obj_t *volume_row = lv_obj_create(col);
-        lv_obj_set_size(volume_row, LV_PCT(100), UI_FIELD_H);
-        lv_obj_set_flex_flow(volume_row, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(volume_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        lv_obj_set_style_bg_opa(volume_row, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_width(volume_row, 0, 0);
-        lv_obj_set_style_pad_all(volume_row, 0, 0);
-        lv_obj_set_style_pad_column(volume_row, UI_GAP, 0);
-        lv_obj_remove_flag(volume_row, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_t *volume_icon = lv_label_create(volume_row);
-        lv_label_set_text(volume_icon, LV_SYMBOL_VOLUME_MAX);
-        lv_obj_set_style_text_font(volume_icon, UI_FONT, 0);
-        lv_obj_set_style_text_color(volume_icon, UI_COLOR_MUTED, 0);
-        lv_obj_t *volume = lv_slider_create(volume_row);
-        lv_slider_set_range(volume, 0, 100);
-        lv_slider_set_value(volume, g_settings.volume, LV_ANIM_OFF);
-        lv_obj_set_height(volume, UI_SLIDER_H);
-        lv_obj_set_flex_grow(volume, 1);
-        lv_obj_add_event_cb(volume, volume_event, LV_EVENT_ALL, NULL);
-        s_volume_value = lv_label_create(volume_row);
-        lv_label_set_text_fmt(s_volume_value, "%u%%", g_settings.volume);
-        lv_obj_set_width(s_volume_value, UI_VOLUME_VALUE_W);
-        lv_obj_set_style_text_font(s_volume_value, UI_FONT_SMALL, 0);
-        lv_obj_set_style_text_color(s_volume_value, UI_COLOR_MUTED, 0);
-        lv_obj_set_style_text_align(s_volume_value, LV_TEXT_ALIGN_RIGHT, 0);
+#if UI_LANDSCAPE
+        meter_create(col);  // above the volume, under the activity panel
+#endif
+        lv_obj_t *volume = ui_volume_row(col);
+#if UI_LANDSCAPE
+        // Clear space above and below, between the meter and the talk button.
+        lv_obj_set_height(volume, UI_FIELD_H + 4 * UI_PAD);
+        lv_obj_set_style_pad_ver(volume, 2 * UI_PAD, 0);
+#endif
 
-        s_meter = lv_bar_create(col);
-        lv_obj_set_size(s_meter, LV_PCT(100), UI_METER_H);
-        lv_bar_set_range(s_meter, 0, 100);
-        lv_bar_set_value(s_meter, 0, LV_ANIM_OFF);
-        lv_obj_set_style_radius(s_meter, UI_METER_H / 2, 0);
-        lv_obj_set_style_bg_color(s_meter, UI_COLOR_PANEL, 0);
+#if !UI_LANDSCAPE
+        meter_create(col);
+#endif
 
         s_talk = lv_button_create(col);
         lv_obj_set_size(s_talk, LV_PCT(100), UI_TALK_BUTTON_H);
@@ -258,6 +323,9 @@ void ui_home_show(void)
         lv_obj_center(s_talk_label);
         set_talk(UI_COLOR_PANEL, LV_SYMBOL_AUDIO "  OFFLINE");
 
+#if CONFIG_ZELLO_BOARD_TDECK
+        input_tdeck_set_talk_screen(s_scr);
+#endif
         s_timer = lv_timer_create(refresh, REFRESH_MS, NULL);
         ui_home_refresh_account();
         refresh(NULL);

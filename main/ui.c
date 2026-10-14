@@ -33,10 +33,14 @@ static const char *battery_symbol(uint8_t percent)
 // The Zello link as an up and a down arrow, drawn as lines since the symbol
 // font has no such glyph. Each arrow is one polyline: shaft, then the head
 // traced out and back from the tip.
-#define ZELLO_ICON_W 24
-#define ZELLO_ICON_H 28
-static const lv_point_precise_t s_arrow_up[] = {{7, 25}, {7, 3}, {1, 9}, {7, 3}, {13, 9}};
-static const lv_point_precise_t s_arrow_down[] = {{17, 3}, {17, 25}, {11, 19}, {17, 25}, {23, 19}};
+#define D UI_ZELLO_ICON_DIV
+#define ZELLO_ICON_W (24 / UI_ZELLO_ICON_DIV)
+#define ZELLO_ICON_H (28 / UI_ZELLO_ICON_DIV)
+static const lv_point_precise_t s_arrow_up[] = {{7 / D, 25 / D}, {7 / D, 3 / D}, {1 / D, 9 / D}, {7 / D, 3 / D},
+                                                {13 / D, 9 / D}};
+static const lv_point_precise_t s_arrow_down[] = {{17 / D, 3 / D}, {17 / D, 25 / D}, {11 / D, 19 / D},
+                                                  {17 / D, 25 / D}, {23 / D, 19 / D}};
+#undef D
 
 static lv_obj_t *zello_icon_create(lv_obj_t *parent)
 {
@@ -50,7 +54,7 @@ static lv_obj_t *zello_icon_create(lv_obj_t *parent)
     for (int i = 0; i < 2; i++) {
         lv_obj_t *line = lv_line_create(box);
         lv_line_set_points(line, shapes[i], 5);
-        lv_obj_set_style_line_width(line, 3, 0);
+        lv_obj_set_style_line_width(line, UI_ZELLO_ICON_DIV > 1 ? 2 : 3, 0);
         lv_obj_set_style_line_rounded(line, true, 0);
         s_zello_arrows[i] = line;
     }
@@ -153,7 +157,11 @@ static void field_event(lv_event_t *e)
     lv_obj_t *kb = lv_event_get_user_data(e);
     if (lv_event_get_code(e) == LV_EVENT_FOCUSED) {
         lv_keyboard_set_textarea(kb, ta);
+#if !UI_HAS_KEYBOARD
+        // With a physical keyboard the on-screen one stays hidden; it still
+        // exists so every screen's keyboard handling works unchanged.
         lv_obj_remove_flag(kb, LV_OBJ_FLAG_HIDDEN);
+#endif
         // Once the keyboard has taken its space, bring the field into view.
         lv_obj_update_layout(lv_obj_get_screen(ta));
         lv_obj_scroll_to_view_recursive(ta, LV_ANIM_ON);

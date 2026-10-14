@@ -24,6 +24,9 @@ void audio_play_flush(void);
 bool audio_is_playing(void);
 
 void audio_set_volume(int percent);
+// A short tone at the current volume, so a volume change can be heard.
+// Skipped while voice is playing.
+void audio_beep(void);
 void audio_set_mic_gain(int db);
 
 // Local mic -> speaker loopback for bring-up testing.

@@ -1,5 +1,19 @@
 menu "Zello Client"
 
+    choice ZELLO_BOARD
+        prompt "Board"
+        depends on IDF_TARGET_ESP32S3
+        default ZELLO_BOARD_TDECK
+        help
+            The ESP32-S3 board to build for. The ESP32-P4 build is always the
+            LilyGO T-Display-P4.
+
+        config ZELLO_BOARD_TDECK
+            bool "LilyGO T-Deck / T-Deck Plus"
+        config ZELLO_BOARD_WIO_TRACKER_L2
+            bool "Seeed Wio Tracker L2"
+    endchoice
+
     choice ZELLO_NETWORK
         prompt "Zello network"
         default ZELLO_NETWORK_CONSUMER

@@ -3,9 +3,15 @@ dependencies:
 
   espressif/esp_codec_dev: "~1.5"
 
-  # MIPI-DSI AMOLED UI.
+  # The LVGL UI: MIPI-DSI AMOLED on the P4, SPI LCD on the T-Deck.
   lvgl/lvgl: "~9.3"
   espressif/esp_lvgl_port: "^2.6"
+
+  # T-Deck touch controller.
+  espressif/esp_lcd_touch_gt911:
+    version: "^1.1"
+    rules:
+      - if: "target in [esp32s3]"
 
   # The Zello Channels API transport.
   espressif/esp_websocket_client: "^1.5"

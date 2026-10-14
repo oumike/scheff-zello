@@ -1,0 +1,31 @@
+# ESP32-S3 boards: the LilyGO T-Deck / T-Deck Plus and the Seeed Wio Tracker L2.
+# Layered on sdkconfig.defaults by ESP-IDF.
+
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# 8 MB octal PSRAM. Internal RAM is far tighter than on the P4, and TLS,
+# Wi-Fi, LVGL's draw buffers and the Opus encoder all want it: send Wi-Fi and
+# lwIP buffers and larger heap allocations to PSRAM, and keep a reserve of
+# internal DMA-capable RAM for SPI and I2S.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+
+# The console is the S3's built-in USB Serial/JTAG port.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# The compact 320x240 UI's text sizes (see ui_internal.h).
+CONFIG_LV_FONT_MONTSERRAT_8=y
+CONFIG_LV_FONT_MONTSERRAT_10=y
+CONFIG_LV_FONT_MONTSERRAT_12=y
+
+# Internal RAM again: on the S3, IRAM and the heap share one SRAM, so code
+# kept in IRAM for Wi-Fi and lwIP speed comes straight out of the heap. Voice
+# at 24 kbit/s doesn't need it.
+CONFIG_ESP_WIFI_IRAM_OPT=n
+CONFIG_ESP_WIFI_RX_IRAM_OPT=n
+CONFIG_LWIP_IRAM_OPTIMIZATION=n

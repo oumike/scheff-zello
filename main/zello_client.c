@@ -8,6 +8,7 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"
 #include "cJSON.h"
 #include "esp_crt_bundle.h"
 #include "esp_log.h"
@@ -301,14 +302,20 @@ esp_err_t zello_send_text(const char *text)
 void zello_set_ptt(bool on)
 {
     if (on) {
-        if (zello_state() != ZELLO_ONLINE) return;
+        if (zello_state() != ZELLO_ONLINE) {
+            ESP_LOGW(TAG, "talk ignored: not signed in to a channel");
+            return;
+        }
         lock();
         bool busy = s_status.receiving;
         bool already = s_status.ptt || s_status.starting;
         unlock();
         // Half duplex: Zello would reject the stream anyway while a talker
         // holds the channel.
-        if (busy || already) return;
+        if (busy || already) {
+            ESP_LOGI(TAG, "talk ignored: %s", busy ? "someone else is talking" : "already transmitting");
+            return;
+        }
         s_ptt_wanted = true;
         send_start_stream();
         return;
@@ -699,8 +706,17 @@ esp_err_t zello_init(void)
     s_lock = xSemaphoreCreateMutex();
     s_conn_lock = xSemaphoreCreateMutex();
     s_send_lock = xSemaphoreCreateMutex();
+#if CONFIG_IDF_TARGET_ESP32S3
+    // The S3's internal RAM is too small to hold these alongside Wi-Fi and
+    // TLS (FreeRTOS objects otherwise always land there): queues and codec
+    // stacks go to PSRAM. Neither codec task writes flash, which a task with
+    // a PSRAM stack must never do.
+    s_tx_q = xQueueCreateWithCaps(TX_QUEUE_DEPTH, sizeof(tx_frame_t), MALLOC_CAP_SPIRAM);
+    s_rx_q = xQueueCreateWithCaps(RX_QUEUE_DEPTH, sizeof(rx_packet_t), MALLOC_CAP_SPIRAM);
+#else
     s_tx_q = xQueueCreate(TX_QUEUE_DEPTH, sizeof(tx_frame_t));
     s_rx_q = xQueueCreate(RX_QUEUE_DEPTH, sizeof(rx_packet_t));
+#endif
     s_asm = malloc(MESSAGE_MAX);
     if (!s_lock || !s_conn_lock || !s_send_lock || !s_tx_q || !s_rx_q || !s_asm) return ESP_ERR_NO_MEM;
 
@@ -709,10 +725,17 @@ esp_err_t zello_init(void)
 
     // Opus needs tens of kilobytes of stack of its own, so both codec paths get
     // their own task rather than running on the capture or socket tasks.
+#if CONFIG_IDF_TARGET_ESP32S3
+    if (xTaskCreateWithCaps(tx_task, "zello_tx", TX_TASK_STACK, NULL, 18, NULL, MALLOC_CAP_SPIRAM) != pdPASS ||
+        xTaskCreateWithCaps(rx_task, "zello_rx", RX_TASK_STACK, NULL, 17, NULL, MALLOC_CAP_SPIRAM) != pdPASS) {
+        return ESP_ERR_NO_MEM;
+    }
+#else
     if (xTaskCreate(tx_task, "zello_tx", TX_TASK_STACK, NULL, 18, NULL) != pdPASS ||
         xTaskCreate(rx_task, "zello_rx", RX_TASK_STACK, NULL, 17, NULL) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
+#endif
     return ESP_OK;
 }
 

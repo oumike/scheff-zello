@@ -7,3 +7,7 @@ sdkconfig.old
 sdkconfig.tdisplay-p4
 sdkconfig.tdisplay-p4.old
 .DS_Store
+sdkconfig.tdeck
+sdkconfig.tdeck.old
+sdkconfig.wio-tracker-l2
+sdkconfig.wio-tracker-l2.old

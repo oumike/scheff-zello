@@ -7,18 +7,21 @@
 #include "driver/i2c_master.h"
 #include "esp_check.h"
 #include "esp_heap_caps.h"
-#include "esp_lcd_mipi_dsi.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
-#include "esp_ldo_regulator.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_lvgl_port.h"
-#include "hal/axi_icm_ll.h"
-#include "hal/dw_gdma_ll.h"
 #include "board.h"
 
 static const char *TAG = "display";
+
+#if CONFIG_IDF_TARGET_ESP32P4
+
+#include "esp_lcd_mipi_dsi.h"
+#include "esp_ldo_regulator.h"
+#include "hal/axi_icm_ll.h"
+#include "hal/dw_gdma_ll.h"
 
 // Panel timing and init sequence follow camillia-mt's T-Display P4 port
 // (src/hal/hw_tdisplay_p4.h, tdisplay_p4_display.h), which in turn follows
@@ -351,6 +354,364 @@ bool display_test_pattern(void)
 {
     return s_test_pattern;
 }
+
+#elif CONFIG_ZELLO_BOARD_WIO_TRACKER_L2
+
+#include "esp_lcd_touch_gt911.h"
+#include "lcd_nv3031b.h"
+
+// The NV3031B's native 240x320 portrait turned to landscape: row/column
+// exchange plus a mirrored y (MADCTL 0xA0), as camillia-mt and Tactility set
+// it. 40 MHz QSPI as Tactility and Launcher run it.
+#define LCD_SPI_HZ         (40 * 1000 * 1000)
+#define DRAW_BUF_LINES     24
+#define BRIGHTNESS_DEFAULT 180
+
+// LP5814 LED driver: the backlight is its four channels in parallel.
+#define LP5814_PWM_REG 0x18  // 0x18..0x1B, one per channel
+#define LP5814_CHANNELS 4
+
+static esp_lcd_panel_io_handle_t s_io;
+static esp_lcd_panel_handle_t s_panel;
+static i2c_master_dev_handle_t s_lp5814;
+
+static esp_err_t lp5814_write(uint8_t reg, uint8_t val)
+{
+    uint8_t buf[2] = {reg, val};
+    return i2c_master_transmit(s_lp5814, buf, sizeof(buf), 100);
+}
+
+void display_set_brightness(uint8_t level)
+{
+    if (!s_lp5814) return;
+    for (int i = 0; i < LP5814_CHANNELS; i++) lp5814_write(LP5814_PWM_REG + i, level);
+}
+
+// Brought up before the touch controller is probed, as camillia-mt does.
+static esp_err_t backlight_init(void)
+{
+    i2c_device_config_t dev = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = BOARD_LP5814_ADDR,
+        .scl_speed_hz = 100000,
+    };
+    ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(board_main_i2c_bus(), &dev, &s_lp5814), TAG, "lp5814 add");
+
+    // camillia-mt's sequence: chip enable, manual PWM mode on all four
+    // channels at a fixed drive current, then latch the configuration.
+    static const uint8_t seq[][2] = {
+        {0x00, 0x01}, {0x01, 0x01}, {0x02, 0x00}, {0x04, 0x4E}, {0x05, 0xF0},
+        {0x14, 200},  {0x15, 200},  {0x16, 200},  {0x17, 200},
+        {0x18, 0},    {0x19, 0},    {0x1A, 0},    {0x1B, 0},  // dark until display_reveal()
+        {0x02, 0x0F}, {0x0F, 0x55},
+    };
+    for (size_t i = 0; i < sizeof(seq) / sizeof(seq[0]); i++) {
+        esp_err_t err = lp5814_write(seq[i][0], seq[i][1]);
+        if (err != ESP_OK) {
+            i2c_master_bus_rm_device(s_lp5814);
+            s_lp5814 = NULL;
+            return err;
+        }
+    }
+    return ESP_OK;
+}
+
+static esp_err_t panel_init(void)
+{
+    // QSPI framing: 32-bit commands (opcode + command), no DC line.
+    esp_lcd_panel_io_spi_config_t io_cfg = {
+        .cs_gpio_num = BOARD_LCD_CS,
+        .dc_gpio_num = -1,
+        .spi_mode = 3,
+        .pclk_hz = LCD_SPI_HZ,
+        .trans_queue_depth = 10,
+        .lcd_cmd_bits = 32,
+        .lcd_param_bits = 8,
+        .flags.quad_mode = 1,
+    };
+    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)board_spi_host(), &io_cfg, &s_io),
+                        TAG, "panel io");
+
+    esp_lcd_panel_dev_config_t dev_cfg = {
+        .reset_gpio_num = -1,  // board_init() already reset it through the expander
+        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
+        .bits_per_pixel = 16,
+    };
+    ESP_RETURN_ON_ERROR(lcd_new_panel_nv3031b(s_io, &dev_cfg, &s_panel), TAG, "nv3031b");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(s_panel), TAG, "reset");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_init(s_panel), TAG, "init");
+    // Unlike the T-Deck's ST7789, this panel shows true colours uninverted.
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_invert_color(s_panel, false), TAG, "invert");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_swap_xy(s_panel, true), TAG, "swap");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_mirror(s_panel, false, true), TAG, "mirror");
+    return esp_lcd_panel_disp_on_off(s_panel, true);
+}
+
+// GT911 reports in the panel's portrait 240x320 space; landscape is x = 319 -
+// raw y, y = raw x (Tactility's device tree: swap_xy and mirror_y). board_init()
+// strapped it to 0x5D through its reset.
+static esp_err_t touch_init(lv_display_t *disp)
+{
+    uint16_t addr = ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS;
+    if (i2c_master_probe(board_main_i2c_bus(), addr, 50) != ESP_OK) {
+        addr = ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP;
+        ESP_RETURN_ON_ERROR(i2c_master_probe(board_main_i2c_bus(), addr, 50), TAG, "no GT911 at 0x5D or 0x14");
+    }
+
+    esp_lcd_panel_io_handle_t tio;
+    esp_lcd_panel_io_i2c_config_t tio_cfg = ESP_LCD_TOUCH_IO_I2C_GT911_CONFIG();
+    tio_cfg.dev_addr = addr;
+    tio_cfg.scl_speed_hz = 100000;
+    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_i2c(board_main_i2c_bus(), &tio_cfg, &tio), TAG, "touch io");
+
+    esp_lcd_touch_config_t tp_cfg = {
+        .x_max = DISPLAY_V_RES,  // portrait width
+        .y_max = DISPLAY_H_RES,  // portrait height
+        .rst_gpio_num = -1,      // on the expander; board_init() handled it
+        .int_gpio_num = GPIO_NUM_NC,  // also on the expander: polled
+        .flags = {
+            .swap_xy = 1,
+            .mirror_x = 0,
+            .mirror_y = 1,
+        },
+    };
+    esp_lcd_touch_handle_t tp;
+    ESP_RETURN_ON_ERROR(esp_lcd_touch_new_i2c_gt911(tio, &tp_cfg, &tp), TAG, "gt911");
+
+    const lvgl_port_touch_cfg_t touch_cfg = {.disp = disp, .handle = tp};
+    ESP_RETURN_ON_FALSE(lvgl_port_add_touch(&touch_cfg), ESP_FAIL, TAG, "lvgl touch");
+    ESP_LOGI(TAG, "GT911 ready at 0x%02x", addr);
+    return ESP_OK;
+}
+
+esp_err_t display_init(void)
+{
+    // Without the backlight the screen is dark, but touch and the UI still work.
+    esp_err_t bl_err = backlight_init();
+    if (bl_err != ESP_OK) ESP_LOGE(TAG, "backlight unavailable: %s", esp_err_to_name(bl_err));
+    ESP_RETURN_ON_ERROR(panel_init(), TAG, "panel");
+
+    lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();
+    port_cfg.task_stack = 8192;
+    ESP_RETURN_ON_ERROR(lvgl_port_init(&port_cfg), TAG, "lvgl port");
+
+    const lvgl_port_display_cfg_t disp_cfg = {
+        .io_handle = s_io,
+        .panel_handle = s_panel,
+        .buffer_size = DISPLAY_H_RES * DRAW_BUF_LINES,
+        .double_buffer = true,
+        .hres = DISPLAY_H_RES,
+        .vres = DISPLAY_V_RES,
+        .color_format = LV_COLOR_FORMAT_RGB565,
+        .rotation = {
+            .swap_xy = true,
+            .mirror_x = false,
+            .mirror_y = true,
+        },
+        .flags = {
+            .buff_dma = true,
+            .swap_bytes = true,  // the NV3031B takes RGB565 big-endian
+        },
+    };
+    lv_display_t *disp = lvgl_port_add_disp(&disp_cfg);
+    ESP_RETURN_ON_FALSE(disp, ESP_FAIL, TAG, "lvgl display");
+
+    // Touch is the only way to drive this UI, but carry on without it so the
+    // console and web config still work.
+    esp_err_t terr = touch_init(disp);
+    if (terr != ESP_OK) ESP_LOGE(TAG, "touch unavailable: %s", esp_err_to_name(terr));
+
+    ESP_LOGI(TAG, "%dx%d LCD ready, %u bytes internal RAM free", DISPLAY_H_RES, DISPLAY_V_RES,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    return ESP_OK;
+}
+
+esp_err_t display_set_test_pattern(bool on)
+{
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+bool display_test_pattern(void)
+{
+    return false;
+}
+
+#elif CONFIG_ZELLO_BOARD_TDECK
+
+#include "driver/ledc.h"
+#include "esp_lcd_panel_vendor.h"
+#include "esp_lcd_touch_gt911.h"
+
+// Timing and orientation follow camillia-mt's T-Deck port: 40 MHz writes, and
+// the panel's native 240x320 portrait turned to landscape (LovyanGFX rotation
+// 1, i.e. row/column exchange plus a mirrored x).
+#define LCD_SPI_HZ         (40 * 1000 * 1000)
+#define DRAW_BUF_LINES     24
+#define BRIGHTNESS_DEFAULT 180
+
+#define BL_TIMER    LEDC_TIMER_0
+#define BL_CHANNEL  LEDC_CHANNEL_0
+#define BL_BITS     LEDC_TIMER_13_BIT
+#define BL_MAX_DUTY ((1 << 13) - 1)
+
+static esp_lcd_panel_io_handle_t s_io;
+static esp_lcd_panel_handle_t s_panel;
+
+static esp_err_t backlight_init(void)
+{
+    ledc_timer_config_t timer = {
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .duty_resolution = BL_BITS,
+        .timer_num = BL_TIMER,
+        .freq_hz = 5000,
+        .clk_cfg = LEDC_AUTO_CLK,
+    };
+    ESP_RETURN_ON_ERROR(ledc_timer_config(&timer), TAG, "backlight timer");
+    ledc_channel_config_t chan = {
+        .gpio_num = BOARD_LCD_BL,
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .channel = BL_CHANNEL,
+        .timer_sel = BL_TIMER,
+        .duty = 0,  // dark until display_reveal()
+    };
+    return ledc_channel_config(&chan);
+}
+
+void display_set_brightness(uint8_t level)
+{
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, BL_CHANNEL, (uint32_t)level * BL_MAX_DUTY / 255);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, BL_CHANNEL);
+}
+
+static esp_err_t panel_init(void)
+{
+    esp_lcd_panel_io_spi_config_t io_cfg = {
+        .cs_gpio_num = BOARD_LCD_CS,
+        .dc_gpio_num = BOARD_LCD_DC,
+        .spi_mode = 0,
+        .pclk_hz = LCD_SPI_HZ,
+        .trans_queue_depth = 10,
+        .lcd_cmd_bits = 8,
+        .lcd_param_bits = 8,
+    };
+    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)board_spi_host(), &io_cfg, &s_io),
+                        TAG, "panel io");
+
+    esp_lcd_panel_dev_config_t dev_cfg = {
+        .reset_gpio_num = -1,  // no reset line; esp_lcd_panel_reset() sends a software reset
+        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
+        .bits_per_pixel = 16,
+    };
+    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_st7789(s_io, &dev_cfg, &s_panel), TAG, "st7789");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(s_panel), TAG, "reset");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_init(s_panel), TAG, "init");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_invert_color(s_panel, true), TAG, "invert");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_swap_xy(s_panel, true), TAG, "swap");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_mirror(s_panel, true, false), TAG, "mirror");
+    return esp_lcd_panel_disp_on_off(s_panel, true);
+}
+
+// GT911 reports in the panel's portrait 240x320 space. Mirroring x and then
+// exchanging the axes gives landscape coordinates that match the panel's
+// rotation (LilyGO's T-Deck examples set the same swap and mirror).
+static esp_err_t touch_init(lv_display_t *disp)
+{
+    // The GT911 picks 0x5D or 0x14 at power-up from the level on its INT
+    // line, and with no reset line here to force one, either can come up.
+    // It may also still be starting after the power switch: give it time.
+    uint16_t addr = 0;
+    for (int attempt = 0; attempt < 10 && !addr; attempt++) {
+        if (i2c_master_probe(board_main_i2c_bus(), ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS, 20) == ESP_OK) {
+            addr = ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS;
+        } else if (i2c_master_probe(board_main_i2c_bus(), ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP, 20) == ESP_OK) {
+            addr = ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP;
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+    }
+    ESP_RETURN_ON_FALSE(addr, ESP_ERR_NOT_FOUND, TAG, "no GT911 at 0x5D or 0x14");
+
+    esp_lcd_panel_io_handle_t tio;
+    esp_lcd_panel_io_i2c_config_t tio_cfg = ESP_LCD_TOUCH_IO_I2C_GT911_CONFIG();
+    tio_cfg.dev_addr = addr;
+    tio_cfg.scl_speed_hz = 400000;
+    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_i2c(board_main_i2c_bus(), &tio_cfg, &tio), TAG, "touch io");
+
+    esp_lcd_touch_config_t tp_cfg = {
+        .x_max = DISPLAY_V_RES,  // portrait width
+        .y_max = DISPLAY_H_RES,  // portrait height
+        .rst_gpio_num = -1,
+        // Polled, as camillia-mt does on this board: with the INT line
+        // configured, esp_lvgl_port reads only when it fires, and here it
+        // never did (the line doubles as the GT911's address strap).
+        .int_gpio_num = GPIO_NUM_NC,
+        .flags = {
+            .swap_xy = 1,
+            .mirror_x = 1,
+            .mirror_y = 0,
+        },
+    };
+    esp_lcd_touch_handle_t tp;
+    ESP_RETURN_ON_ERROR(esp_lcd_touch_new_i2c_gt911(tio, &tp_cfg, &tp), TAG, "gt911");
+
+    const lvgl_port_touch_cfg_t touch_cfg = {.disp = disp, .handle = tp};
+    ESP_RETURN_ON_FALSE(lvgl_port_add_touch(&touch_cfg), ESP_FAIL, TAG, "lvgl touch");
+    ESP_LOGI(TAG, "GT911 ready at 0x%02x", addr);
+    return ESP_OK;
+}
+
+esp_err_t display_init(void)
+{
+    ESP_RETURN_ON_ERROR(backlight_init(), TAG, "backlight");
+    ESP_RETURN_ON_ERROR(panel_init(), TAG, "panel");
+
+    lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();
+    port_cfg.task_stack = 8192;
+    ESP_RETURN_ON_ERROR(lvgl_port_init(&port_cfg), TAG, "lvgl port");
+
+    const lvgl_port_display_cfg_t disp_cfg = {
+        .io_handle = s_io,
+        .panel_handle = s_panel,
+        // Partial rendering into two small internal DMA buffers: one is sent
+        // over SPI while LVGL draws into the other.
+        .buffer_size = DISPLAY_H_RES * DRAW_BUF_LINES,
+        .double_buffer = true,
+        .hres = DISPLAY_H_RES,
+        .vres = DISPLAY_V_RES,
+        .color_format = LV_COLOR_FORMAT_RGB565,
+        .rotation = {
+            .swap_xy = true,
+            .mirror_x = true,
+            .mirror_y = false,
+        },
+        .flags = {
+            .buff_dma = true,
+            .swap_bytes = true,  // the ST7789 takes RGB565 big-endian
+        },
+    };
+    lv_display_t *disp = lvgl_port_add_disp(&disp_cfg);
+    ESP_RETURN_ON_FALSE(disp, ESP_FAIL, TAG, "lvgl display");
+
+    // Touch is optional: the keyboard and trackball still drive the UI.
+    esp_err_t terr = touch_init(disp);
+    if (terr != ESP_OK) ESP_LOGE(TAG, "touch unavailable: %s", esp_err_to_name(terr));
+
+    ESP_LOGI(TAG, "%dx%d LCD ready, %u bytes internal RAM free", DISPLAY_H_RES, DISPLAY_V_RES,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    return ESP_OK;
+}
+
+esp_err_t display_set_test_pattern(bool on)
+{
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+bool display_test_pattern(void)
+{
+    return false;
+}
+
+#endif
 
 void display_reveal(void)
 {

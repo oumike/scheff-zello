@@ -1,10 +1,11 @@
 // Zello account: the network (consumer or Zello Work), username, password and
 // the developer token the consumer network needs. Part of onboarding after
 // Wi-Fi. Afterwards the same form is the lower half of Settings, under the
-// Wi-Fi network, with one Save for both.
+// Wi-Fi network, with one Save for both, and the microphone gain below.
 
 #include <stdio.h>
 #include <string.h>
+#include "audio.h"
 #include "net_wifi.h"
 #include "onboard.h"
 #include "settings.h"
@@ -181,6 +182,54 @@ static void wifi_scan_clicked(lv_event_t *e)
     ui_wifi_scan(s_root, wifi_picked);
 }
 
+// The web config's limit: the codecs top out around 37-42 dB.
+#define MIC_GAIN_MAX_DB 42
+
+// Mic gain applies as the slider moves and is saved when it is let go, as
+// the home screen's volume is; Save and Cancel don't touch it.
+static void mic_gain_event(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_VALUE_CHANGED) {
+        int db = lv_slider_get_value(lv_event_get_target(e));
+        g_settings.mic_gain = db;
+        audio_set_mic_gain(db);
+        lv_label_set_text_fmt(lv_event_get_user_data(e), "%d dB", db);
+    } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST || code == LV_EVENT_DEFOCUSED) {
+        settings_save();
+    }
+}
+
+static void build_audio_fields(lv_obj_t *col)
+{
+    lv_obj_t *row = lv_obj_create(col);
+    lv_obj_set_size(row, LV_PCT(100), UI_FIELD_H);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(row, 0, 0);
+    lv_obj_set_style_pad_column(row, UI_GAP, 0);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(row, 0, 0);
+    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *icon = lv_label_create(row);
+    lv_label_set_text(icon, LV_SYMBOL_AUDIO);
+    lv_obj_set_style_text_font(icon, UI_FONT, 0);
+    lv_obj_set_style_text_color(icon, UI_COLOR_MUTED, 0);
+    lv_obj_t *slider = lv_slider_create(row);
+    lv_slider_set_range(slider, 0, MIC_GAIN_MAX_DB);
+    lv_slider_set_value(slider, g_settings.mic_gain, LV_ANIM_OFF);
+    lv_obj_set_height(slider, UI_SLIDER_H);
+    lv_obj_set_flex_grow(slider, 1);
+    lv_obj_t *value = lv_label_create(row);
+    lv_label_set_text_fmt(value, "%u dB", g_settings.mic_gain);
+    lv_obj_set_width(value, UI_VOLUME_VALUE_W * 3 / 2);  // "42 dB" is wider than "100%"
+    lv_obj_set_style_text_font(value, UI_FONT_SMALL, 0);
+    lv_obj_set_style_text_color(value, UI_COLOR_MUTED, 0);
+    lv_obj_set_style_text_align(value, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_add_event_cb(slider, mic_gain_event, LV_EVENT_ALL, value);
+}
+
 static void build_wifi_fields(lv_obj_t *col, lv_obj_t *kb)
 {
     char ip[16], status[96];
@@ -235,8 +284,31 @@ void ui_account_edit(void)
     build_fields(col, kb);
     ui_label(col, "The account applies right away. A new Wi-Fi network is tried first, then the device restarts on it.",
              UI_FONT_SMALL, UI_COLOR_MUTED);
+    ui_label(col, "Microphone gain", UI_FONT, UI_COLOR_ACCENT);
+    build_audio_fields(col);
+    ui_label(col, "Applies and saves as you move it.", UI_FONT_SMALL, UI_COLOR_MUTED);
     ui_spacer(col);
+#if UI_LANDSCAPE
+    // Side by side: stacked full-width buttons cost a wide screen too much height.
+    lv_obj_t *row = lv_obj_create(col);
+    lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_all(row, 0, 0);
+    lv_obj_set_style_pad_column(row, UI_PAD * 4, 0);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(row, 0, 0);
+    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *const buttons[] = {
+        ui_button(row, LV_SYMBOL_SAVE "  Save", UI_COLOR_GO, save_clicked, NULL),
+        ui_button(row, "Cancel", UI_COLOR_PANEL, cancel_clicked, NULL),
+    };
+    for (int i = 0; i < 2; i++) {
+        lv_obj_set_width(buttons[i], 0);
+        lv_obj_set_flex_grow(buttons[i], 1);
+    }
+#else
     ui_button(col, LV_SYMBOL_SAVE "  Save", UI_COLOR_GO, save_clicked, NULL);
     ui_button(col, "Cancel", UI_COLOR_PANEL, cancel_clicked, NULL);
+#endif
     lv_screen_load(s_root);
 }

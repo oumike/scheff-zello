@@ -1,0 +1,7 @@
+# Layered on sdkconfig.defaults by platformio.ini, T-Display-P4 builds only.
+
+# The T-Display P4 V1.0 carries ECO2 (pre rev 3.0) silicon, as in camillia-mt's
+# tdisplay_p4 board. pioarduino applies the board's esp32p4_es variant only to
+# Arduino builds, so a pure ESP-IDF build has to select it here.
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+CONFIG_ESP32P4_REV_MIN_1=y

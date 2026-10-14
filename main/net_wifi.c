@@ -10,9 +10,11 @@
 #include "esp_mac.h"
 #include "esp_check.h"
 #include "esp_event.h"
+#if CONFIG_IDF_TARGET_ESP32P4
 #include "esp_hosted.h"
 #include "esp_hosted_transport_config.h"
 #include "board.h"
+#endif
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_netif_sntp.h"
@@ -49,10 +51,12 @@ static bool reason_is_not_found(uint8_t r)
            r == WIFI_REASON_NO_AP_FOUND_IN_AUTHMODE_THRESHOLD || r == WIFI_REASON_NO_AP_FOUND_IN_RSSI_THRESHOLD;
 }
 
+#if CONFIG_IDF_TARGET_ESP32P4
 static esp_err_t c6_reset_cb(void *arg, bool level)
 {
     return board_c6_enable(level);
 }
+#endif
 
 static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
@@ -88,11 +92,14 @@ esp_err_t net_wifi_init(void)
     s_events = xEventGroupCreate();
     s_join_lock = xSemaphoreCreateMutex();
 
-    // The P4 reaches Wi-Fi through the C6 coprocessor over ESP-Hosted.
+#if CONFIG_IDF_TARGET_ESP32P4
+    // The P4 reaches Wi-Fi through the C6 coprocessor over ESP-Hosted. The S3
+    // has its own radio, and esp_wifi_init() below is all it needs.
     ESP_RETURN_ON_FALSE(esp_hosted_sdio_set_reset_callback(c6_reset_cb, NULL) == ESP_TRANSPORT_OK,
                         ESP_FAIL, TAG, "hosted reset cb");
     ESP_RETURN_ON_ERROR(board_c6_enable(true), TAG, "c6 power");
     ESP_RETURN_ON_ERROR(esp_hosted_init(), TAG, "esp_hosted_init");
+#endif
 
     ESP_RETURN_ON_ERROR(esp_netif_init(), TAG, "netif");
     esp_err_t err = esp_event_loop_create_default();

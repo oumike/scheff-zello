@@ -11,6 +11,48 @@
 #include "display.h"
 #include "net_wifi.h"
 
+#if CONFIG_IDF_TARGET_ESP32S3
+
+// T-Deck and Wio Tracker L2: a 320x240 LCD with square corners, and the
+// home screen laid out for landscape. Everything is half the size first
+// tried here; the fonts are as close to half as LVGL's built-in Montserrat
+// goes (8 px is its smallest).
+#define UI_PAD    3
+#define UI_GAP    3
+#define UI_BTN_H  18
+#define UI_FIELD_H 16
+#define UI_RADIUS 3
+#define UI_SAFE_TOP    0
+#define UI_SAFE_BOTTOM 0
+
+#define UI_FONT_SMALL (&lv_font_montserrat_8)
+#define UI_FONT       (&lv_font_montserrat_10)
+#define UI_FONT_TITLE (&lv_font_montserrat_12)
+#define UI_STATUS_BAR_W     60
+#define UI_STATUS_BAR_H     14
+#define UI_SPINNER_SIZE     20
+#define UI_ICON_BUTTON_SIZE 16
+#define UI_EDIT_BUTTON_H    15
+#define UI_CLEAR_BUTTON_W   16
+#define UI_TALK_BUTTON_H    28
+#define UI_SLIDER_H         7
+#define UI_VOLUME_VALUE_W   22
+#define UI_METER_H          6  // any thinner and it reads as a hairline
+// The Zello link icon is drawn in pixels: this divides its size.
+#define UI_ZELLO_ICON_DIV   2
+
+// The home screen as rows across a wide screen.
+#define UI_LANDSCAPE    1
+// The T-Deck types text on its keyboard, so the on-screen one is never shown;
+// the Wio Tracker L2 is touch only.
+#if CONFIG_ZELLO_BOARD_TDECK
+#define UI_HAS_KEYBOARD 1
+#else
+#define UI_HAS_KEYBOARD 0
+#endif
+
+#else
+
 #define UI_PAD    16
 #define UI_GAP    14
 #define UI_BTN_H  96
@@ -35,6 +77,13 @@
 #define UI_SLIDER_H         28
 #define UI_VOLUME_VALUE_W   72
 #define UI_METER_H          18
+
+#define UI_ZELLO_ICON_DIV   1
+
+#define UI_LANDSCAPE    0
+#define UI_HAS_KEYBOARD 0
+
+#endif
 
 // Zello's own palette, dark: the accent is Zello yellow, and the talk button
 // stays green/red so the "safe to talk" signal reads the same as on a radio.

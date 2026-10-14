@@ -1,0 +1,25 @@
+# LilyGO T-Display-P4 (ESP32-P4). Layered on sdkconfig.defaults by ESP-IDF.
+
+CONFIG_IDF_EXPERIMENTAL_FEATURES=y
+
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_HEX=y
+CONFIG_SPIRAM_SPEED_200M=y
+# Keep internal DMA-capable RAM for ESP-Hosted SDIO buffers.
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=65536
+# Run code and read-only data from PSRAM, so a flash write (the channel list
+# saves on every join) doesn't have to suspend the cache. Without this, the
+# interrupt that restarts the display's scan-out DMA each frame can't run
+# during an erase, and the panel flashes blue.
+CONFIG_SPIRAM_XIP_FROM_PSRAM=y
+
+# The L2 cache as the Arduino core (and camillia-mt, on this board) has it.
+# 256 KB with 128-byte lines left the display flashing blue now and then: the
+# DSI scan-out reads its frame buffer from PSRAM through the same memory
+# system. A smaller cache also leaves 128 KB more internal RAM for the heap.
+CONFIG_CACHE_L2_CACHE_128KB=y
+CONFIG_CACHE_L2_CACHE_LINE_64B=y
+
+# Wi-Fi lives on the ESP32-C6 coprocessor (ESP-Hosted over SDIO). We bring the
+# C6 out of reset ourselves through the XL9535 expander, so no auto-init.
+CONFIG_ESP_HOSTED_AUTO_INIT=n

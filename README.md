@@ -1,12 +1,12 @@
 # Scheff for Zello
 
 **Scheff for Zello** (`scheff-zello`) is a [Zello](https://zello.com) push-to-talk client for the **LilyGO T-Display-P4**
-(ESP32-P4 + ESP32-C6), built on ESP-IDF with an LVGL touch UI.
+(ESP32-P4 + ESP32-C6), the **LilyGO T-Deck / T-Deck Plus** (ESP32-S3) and the
+**Seeed Wio Tracker L2** (ESP32-S3), built on ESP-IDF with an LVGL touch UI.
 
 It signs in to the [Zello Channels API](https://github.com/zelloptt/zello-channel-api)
 over a WebSocket, joins one channel, and carries voice both ways as Opus through
-the board's ES8311 codec — the on-board microphone and speaker, no extra
-hardware. Everything is configurable from the touch screen or from a browser.
+the board's own microphone and speaker — no extra hardware. Everything is configurable from the touch screen or from a browser.
 
 Board bring-up (display, touch, audio, power rails, Wi-Fi coprocessor) follows
 `camillia-mt` and `echolink-p4`, and the setup flow is deliberately the same
@@ -29,24 +29,71 @@ implemented; it has not yet been through a long soak test on hardware.
 
 ## Hardware
 
+### LilyGO T-Display-P4
+
 - **LilyGO T-Display-P4 V1.0** (ECO2 silicon, 16 MB flash, HEX PSRAM).
-  `boards/tdisplay_p4.json` and `sdkconfig.pio.defaults` select the pre-rev-3.0
+  `boards/tdisplay_p4.json` and `sdkconfig.pio.p4.defaults` select the pre-rev-3.0
   chip revision; on rev 3.0+ silicon drop `CONFIG_ESP32P4_SELECTS_REV_LESS_V3`.
 - The **ESP32-C6** coprocessor must be running ESP-Hosted slave firmware
   matching `third_party/esp_hosted` (v2.12.x) — the LilygoBox factory image
   does. `scripts/flash-c6.sh` reflashes it if another project overwrote it.
 - Push-to-talk is the **BOOT button**, or the big button on screen.
 
+### LilyGO T-Deck / T-Deck Plus
+
+- ESP32-S3 with 16 MB flash and 8 MB PSRAM; the Wi-Fi is the S3's own, so there
+  is no coprocessor firmware to flash. The T-Deck Pro and T-Deck Max are
+  different boards and are not supported.
+- 320x240 LCD with touch, the QWERTY keyboard and the trackball all work. The
+  UI is the same as the P4's at a compact size; the keyboard types into text
+  fields, and the trackball moves between controls.
+- Push-to-talk, on the home screen:
+  - **Hold the trackball click** to talk.
+  - **Space** starts talking and a second press stops (the keyboard can only
+    report presses, not a key being held).
+  - The **Talk button** along the bottom of the screen, by touch.
+- Elsewhere the trackball click selects; on the home screen, where the click
+  means talk, **Enter** presses the control the trackball has highlighted.
+- Audio is the ES7210 microphone ADC and the MAX98357A speaker amplifier. The
+  LoRa radio and GPS are left off.
+
+### Seeed Wio Tracker L2
+
+- ESP32-S3 with 16 MB flash and 8 MB PSRAM, using the S3's own Wi-Fi.
+- 320x240 NV3031B LCD (QSPI) with GT911 touch. It has no keyboard, so text is
+  typed on the on-screen keyboard; the UI is the T-Deck's compact layout.
+- Push-to-talk: **hold the button on GPIO0**, or the **Talk button** on screen.
+- Audio is the ES8311 DAC into the speaker amplifier and the ES7243E microphone
+  ADC, sharing one I2S port. Which ES7243E channel carries the microphone is not
+  confirmed yet: `MIC_SLOT` in `main/audio.c` averages both for now, and the
+  boot log reports each channel's peak level.
+- The battery is read through the ADS1115 ADC; the LoRa radio and GNSS stay off.
+
 ## Building
 
 PlatformIO fetches and manages ESP-IDF itself; no separate install is needed.
 
 ```sh
-./scripts/build-upload-monitor.sh            # build, flash, then monitor
+./scripts/build-upload-monitor.sh            # T-Display-P4: build, flash, then monitor
+./scripts/build-upload-monitor.sh --tdeck    # T-Deck: build, flash, then monitor
+./scripts/build-upload-monitor.sh --wio-tracker-l2   # Wio Tracker L2
 ./scripts/build-upload-monitor.sh -B         # compile only, no device needed
 ./scripts/build-upload-monitor.sh --port /dev/cu.usbmodem1101
 ./scripts/build-upload-monitor.sh -E         # erase flash first (wipes settings)
+./scripts/build-upload-monitor.sh --help     # every option
 ```
+
+The T-Display-P4 is the default board; `--tdeck` selects the T-Deck and
+`--wio-tracker-l2` the Wio Tracker L2. Each board
+builds into its own directory. Add `--fullclean` (`-F`) the first time you build
+a board, after switching boards, and after changing memory settings in the
+`sdkconfig.defaults*` files: PlatformIO otherwise keeps a stale generated linker
+script, and a P4 built that way boot-loops. The script says so when it applies.
+
+Settings shared by both boards are in `sdkconfig.defaults`; ESP-IDF layers
+`sdkconfig.defaults.esp32p4` or `sdkconfig.defaults.esp32s3` on top for the chip
+being built. The two ESP32-S3 boards are told apart by the "Board" choice in
+`main/Kconfig.projbuild`; the Wio build selects it in `sdkconfig.pio.wio.defaults`.
 
 The script runs `pio` against a separate core directory (`~/.platformio-p4`), so
 the pioarduino platform this project needs cannot be replaced by the

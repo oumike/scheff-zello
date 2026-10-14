@@ -1,42 +1,23 @@
-CONFIG_IDF_TARGET="esp32p4"
-CONFIG_IDF_EXPERIMENTAL_FEATURES=y
+# Shared by both boards. Chip-specific settings live in
+# sdkconfig.defaults.esp32p4 and sdkconfig.defaults.esp32s3, which ESP-IDF
+# layers on top of this file for the target being built.
 
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
-CONFIG_SPIRAM=y
-CONFIG_SPIRAM_MODE_HEX=y
-CONFIG_SPIRAM_SPEED_200M=y
-# Keep internal DMA-capable RAM for ESP-Hosted SDIO buffers.
-CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=65536
-# Run code and read-only data from PSRAM, so a flash write (the channel list
-# saves on every join) doesn't have to suspend the cache. Without this, the
-# interrupt that restarts the display's scan-out DMA each frame can't run
-# during an erase, and the panel flashes blue.
-CONFIG_SPIRAM_XIP_FROM_PSRAM=y
-
-# The L2 cache as the Arduino core (and camillia-mt, on this board) has it.
-# 256 KB with 128-byte lines left the display flashing blue now and then: the
-# DSI scan-out reads its frame buffer from PSRAM through the same memory
-# system. A smaller cache also leaves 128 KB more internal RAM for the heap.
-CONFIG_CACHE_L2_CACHE_128KB=y
-CONFIG_CACHE_L2_CACHE_LINE_64B=y
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
 
 CONFIG_FREERTOS_HZ=1000
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 
-# Wi-Fi lives on the ESP32-C6 coprocessor (ESP-Hosted over SDIO). We bring the
-# C6 out of reset ourselves through the XL9535 expander, so no auto-init.
-CONFIG_ESP_HOSTED_AUTO_INIT=n
+# Wi-Fi credentials live in our own settings, not the driver's NVS copy.
 CONFIG_ESP_WIFI_NVS_ENABLED=n
-
 CONFIG_LWIP_SNTP_MAX_SERVERS=2
 
-# LVGL on the 568x1232 AMOLED. Widgets are allocated in PSRAM (main/lv_mem_psram.c)
+# LVGL. Widgets are allocated in PSRAM (main/lv_mem_psram.c)
 # rather than LVGL's small built-in pool, so long channel lists can't exhaust
-# internal RAM. Fonts are big enough to read and touch at ~330 ppi.
+# internal RAM. The 20/28/36 fonts are the P4's UI sizes; the T-Deck adds 14/16.
 CONFIG_LV_USE_CUSTOM_MALLOC=y
 CONFIG_LV_USE_CLIB_STRING=y
 CONFIG_LV_USE_CLIB_SPRINTF=y

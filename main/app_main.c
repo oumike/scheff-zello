@@ -1,13 +1,20 @@
-// Zello client for the LilyGO T-Display-P4: Wi-Fi through the ESP32-C6
-// coprocessor, the Zello Channels API over a WebSocket, Opus voice through the
-// ES8311 codec, and an LVGL touch UI backed by a browser-based config.
+// Zello client for the LilyGO T-Display-P4 (Wi-Fi through the ESP32-C6
+// coprocessor, voice through the ES8311 codec) and the LilyGO T-Deck (the
+// S3's own Wi-Fi, the ES7210 mic ADC and MAX98357A amplifier, keyboard and
+// trackball) and the Seeed Wio Tracker L2 (the S3's own Wi-Fi, ES8311 DAC and
+// ES7243E mic ADC, touch only): the Zello Channels API over a WebSocket, Opus voice, and an
+// LVGL touch UI backed by a browser-based config.
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "audio.h"
 #include "board.h"
 #include "channel_list.h"
 #include "console_cmds.h"
 #include "display.h"
+#if CONFIG_ZELLO_BOARD_TDECK
+#include "input_tdeck.h"
+#endif
 #include "net_wifi.h"
 #include "ptt.h"
 #include "settings.h"
@@ -26,6 +33,9 @@ void app_main(void)
     // still works without it.
     esp_err_t disp_err = display_init();
     if (disp_err != ESP_OK) ESP_LOGE(TAG, "display init failed: %s", esp_err_to_name(disp_err));
+#if CONFIG_ZELLO_BOARD_TDECK
+    if (disp_err == ESP_OK && input_tdeck_init() != ESP_OK) ESP_LOGE(TAG, "keyboard and trackball unavailable");
+#endif
     if (channel_list_init() != ESP_OK) ESP_LOGE(TAG, "channel list storage unavailable");
 
     ESP_ERROR_CHECK(audio_init(zello_mic_frame));
@@ -34,6 +44,11 @@ void app_main(void)
 
     ESP_ERROR_CHECK(zello_init());
 
+    // Wi-Fi needs a good slice of internal RAM, and on the T-Deck that is what
+    // runs short; say how much is left when it starts.
+    ESP_LOGI(TAG, "internal RAM before Wi-Fi: %u free, %u largest block",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     ESP_ERROR_CHECK(net_wifi_init());
     if (g_settings.wifi_ssid[0]) {
         net_wifi_connect(g_settings.wifi_ssid, g_settings.wifi_pass);

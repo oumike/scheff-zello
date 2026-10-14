@@ -1,0 +1,4 @@
+# Seeed Wio Tracker L2: picks the board on top of the ESP32-S3 settings in
+# sdkconfig.defaults.esp32s3 (main/Kconfig.projbuild otherwise defaults to the
+# T-Deck).
+CONFIG_ZELLO_BOARD_WIO_TRACKER_L2=y
