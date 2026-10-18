@@ -4,3 +4,5 @@ phy_init, data, phy,     ,       4K,
 factory,  app,  factory, ,       6M,
 # FAT with wear levelling, mounted at /data: the saved channel list.
 storage,  data, fat,     ,       4M,
+# ESP-IDF core dump after a crash; the next boot copies it to the microSD card.
+coredump, data, coredump, ,       256K,

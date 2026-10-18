@@ -16,6 +16,7 @@
 #include "esp_websocket_client.h"
 #include "audio.h"
 #include "channel_list.h"
+#include "crash_report.h"
 #include "opus_codec.h"
 #include "settings.h"
 
@@ -642,6 +643,18 @@ static void handle_binary(const uint8_t *data, size_t len)
     if (xQueueSend(s_rx_q, &packet, 0) != pdTRUE) ESP_LOGW(TAG, "receive queue full, dropping a packet");
 }
 
+// Why the socket went away, for the log and the disconnect reports.
+static void log_ws_error(const char *what, const esp_websocket_event_data_t *d)
+{
+    static const char *const types[] = {"none", "TCP/TLS transport", "pong timeout", "handshake", "server close"};
+    const esp_websocket_error_codes_t *e = &d->error_handle;
+    unsigned t = e->error_type;
+    ESP_LOGW(TAG, "%s: %s, esp-tls %s (0x%x), tls stack 0x%x, socket errno %d, http %d", what,
+             t < sizeof(types) / sizeof(types[0]) ? types[t] : "?", esp_err_to_name(e->esp_tls_last_esp_err),
+             e->esp_tls_last_esp_err, e->esp_tls_stack_err, e->esp_transport_sock_errno,
+             e->esp_ws_handshake_status_code);
+}
+
 static void on_ws_event(void *arg, esp_event_base_t base, int32_t id, void *event_data)
 {
     esp_websocket_event_data_t *d = event_data;
@@ -652,19 +665,40 @@ static void on_ws_event(void *arg, esp_event_base_t base, int32_t id, void *even
         send_logon();
         break;
 
-    case WEBSOCKET_EVENT_DISCONNECTED:
-        if (zello_state() != ZELLO_FAILED) {
+    case WEBSOCKET_EVENT_DISCONNECTED: {
+        zello_state_t was = zello_state();
+        log_ws_error("disconnected", d);
+        if (was != ZELLO_FAILED) {
             set_state(s_want_connect ? ZELLO_CONNECTING : ZELLO_OFFLINE, NULL);
             if (s_want_connect) log_add("Connection lost, reconnecting...");
         }
+        // Only a session that was up: retries while Wi-Fi is down land here too.
+        if (s_want_connect && (was == ZELLO_ONLINE || was == ZELLO_LOGGING_IN)) {
+            crash_report_disconnect("connection lost");
+        }
+        break;
+    }
+
+    case WEBSOCKET_EVENT_CLOSED:
+        // The client does not reconnect after a server-initiated close.
+        log_ws_error("closed by the server", d);
+        ESP_LOGW(TAG, "close code %d", d->close_status_code);
+        if (s_want_connect) crash_report_disconnect("server closed the connection");
         break;
 
     case WEBSOCKET_EVENT_ERROR:
+        log_ws_error("error", d);
         if (zello_state() != ZELLO_FAILED) set_state(ZELLO_CONNECTING, "Couldn't reach Zello.");
         break;
 
     case WEBSOCKET_EVENT_DATA: {
         int op = d->op_code & 0x0f;
+        if (op == 0x08) {
+            const uint8_t *p = (const uint8_t *)d->data_ptr;
+            int code = d->data_len >= 2 ? (p[0] << 8) | p[1] : 0;
+            ESP_LOGW(TAG, "server sent close, code %d: %.*s", code, d->data_len > 2 ? d->data_len - 2 : 0,
+                     d->data_len > 2 ? d->data_ptr + 2 : "");
+        }
         if (op == 0x08 || op == 0x09 || op == 0x0a) break;  // close, ping, pong
 
         const uint8_t *msg = (const uint8_t *)d->data_ptr;

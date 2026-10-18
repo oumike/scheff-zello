@@ -8,6 +8,7 @@
 #include "audio.h"
 #include "display.h"
 #include "channel_list.h"
+#include "crash_report.h"
 #include "net_wifi.h"
 #include "settings.h"
 #include "zello_client.h"
@@ -175,6 +176,17 @@ static int cmd_loopback(int argc, char **argv)
     return 0;
 }
 
+static int cmd_crash(int argc, char **argv)
+{
+    if (argc >= 2 && !strcmp(argv[1], "test")) {
+        printf("Crashing on purpose; a report goes to the microSD card after the reboot.\n");
+        fflush(stdout);
+        abort();
+    }
+    crash_report_print_status();
+    return 0;
+}
+
 static void reg(const char *cmd, const char *help, const char *hint, esp_console_cmd_func_t fn)
 {
     const esp_console_cmd_t c = {.command = cmd, .help = help, .hint = hint, .func = fn};
@@ -216,6 +228,7 @@ void console_start(void)
     reg("text", "Send a text message to the channel", "<text>", cmd_text);
     reg("log", "Show recent channel activity", NULL, cmd_log);
     reg("loopback", "Mic to speaker loopback test", "[on|off]", cmd_loopback);
+    reg("crash", "Show the last reset and crash reports; 'crash test' crashes on purpose", "[test]", cmd_crash);
     reg("dsipattern", "Display test: colour bars from the DSI controller, no PSRAM reads", "[on|off]",
         cmd_dsipattern);
 

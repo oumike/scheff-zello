@@ -215,6 +215,7 @@ ptt [on|off]                toggle transmit
 text <message>              send a text message to the channel
 log                         recent channel activity
 loopback [on|off]           mic to speaker, for audio bring-up
+crash [test]                last reset reason and crash reports; 'test' crashes on purpose
 ```
 
 `set auth_token <jwt>` works, and the console's line limit is sized for one.
@@ -233,6 +234,7 @@ loopback [on|off]           mic to speaker, for audio bring-up
 | `channel_list.c` | The saved channels, as XML on the internal FAT partition |
 | `settings.c` | NVS-backed settings, one table describing every field |
 | `onboard.c` | The three onboarding steps, shared by the screen and the browser |
+| `crash_report.c` | Crash-surviving log ring, core dump and disconnect reports to microSD |
 | `web_config.c` | HTTP API, the setup hotspot's lifetime, backup export/import |
 | `ui*.c` | LVGL screens: Wi-Fi, account, channels, home/talk |
 | `xml_util.c` | The little XML the stored channel list (and old XML backups) need |
@@ -269,7 +271,24 @@ nvs       24K   settings
 phy_init   4K
 factory     6M  application (~2.0 MB used)
 storage     4M  FAT, mounted at /data: zello-channels.xml
+coredump  256K  ESP-IDF core dump from the last crash
 ```
+
+### Crash and disconnect reports
+
+Every log line is also kept in a RAM ring buffer that survives a panic or
+watchdog reset. After a crash, watchdog or brownout reset, the next boot writes
+to the microSD card's `crash/` folder:
+
+- `NNNN-crash.txt`: reset reason, firmware and ELF SHA256, panic reason,
+  crashed task and backtrace/registers, and the log leading up to the reset
+- `NNNN-core.elf`: the raw core dump, decoded against the matching build's
+  `firmware.elf` with `esp-coredump info_corefile -c NNNN-core.elf firmware.elf`
+
+An unexpected drop of a signed-in Zello session (or the server closing it) writes
+`NNNN-disconnect.txt` with the socket/TLS error details and the recent log; at
+most one every 30 s and 50 per boot. With no card in, the core dump stays in
+flash until `crash` or the next report saves it.
 
 ## Licence
 

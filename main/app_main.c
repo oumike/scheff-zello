@@ -11,6 +11,7 @@
 #include "board.h"
 #include "channel_list.h"
 #include "console_cmds.h"
+#include "crash_report.h"
 #include "display.h"
 #if CONFIG_ZELLO_BOARD_TDECK
 #include "input_tdeck.h"
@@ -26,6 +27,7 @@ static const char *TAG = "main";
 
 void app_main(void)
 {
+    crash_report_init();
     ESP_ERROR_CHECK(settings_load());
     ESP_ERROR_CHECK(board_init());
 
@@ -50,6 +52,7 @@ void app_main(void)
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     ESP_ERROR_CHECK(net_wifi_init());
+    crash_report_start();
     if (g_settings.wifi_ssid[0]) {
         net_wifi_connect(g_settings.wifi_ssid, g_settings.wifi_pass);
     } else {
