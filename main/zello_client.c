@@ -47,7 +47,9 @@ static const char *TAG = "zello";
 // Both come out of internal RAM, which TLS also needs.
 #define TX_TASK_STACK   32768
 #define RX_TASK_STACK   16384
-#define SEND_TIMEOUT_MS 400
+// A write that can't finish in time makes the client abort the whole
+// connection, not just drop the packet, so this has to ride out a Wi-Fi stall.
+#define SEND_TIMEOUT_MS 3000
 
 // How long a start_stream may go unanswered before we give up on the press.
 #define STREAM_START_TIMEOUT_MS 3000
@@ -679,12 +681,17 @@ static void on_ws_event(void *arg, esp_event_base_t base, int32_t id, void *even
         break;
     }
 
-    case WEBSOCKET_EVENT_CLOSED:
-        // The client does not reconnect after a server-initiated close.
+    case WEBSOCKET_EVENT_CLOSED: {
+        zello_state_t was = zello_state();
         log_ws_error("closed by the server", d);
         ESP_LOGW(TAG, "close code %d", d->close_status_code);
+        if (s_want_connect && was != ZELLO_FAILED) {
+            set_state(ZELLO_CONNECTING, NULL);
+            log_add("Zello closed the connection, reconnecting...");
+        }
         if (s_want_connect) crash_report_disconnect("server closed the connection");
         break;
+    }
 
     case WEBSOCKET_EVENT_ERROR:
         log_ws_error("error", d);
@@ -845,6 +852,8 @@ esp_err_t zello_connect(void)
         // between transmissions.
         .ping_interval_sec = 25,
         .keep_alive_enable = true,
+        // Without this the client stops for good after the server closes.
+        .enable_close_reconnect = true,
     };
 
     // One lock across both halves: two reconnects racing here would otherwise

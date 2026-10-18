@@ -14,6 +14,10 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 # Wi-Fi credentials live in our own settings, not the driver's NVS copy.
 CONFIG_ESP_WIFI_NVS_ENABLED=n
 CONFIG_LWIP_SNTP_MAX_SERVERS=2
+# The web server needs 10 sockets of its own on top of Zello, SNTP and DNS.
+CONFIG_LWIP_MAX_SOCKETS=16
+# About 4 s of outgoing voice, so a Wi-Fi stall doesn't stall the sender.
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=16384
 
 # LVGL. Widgets are allocated in PSRAM (main/lv_mem_psram.c)
 # rather than LVGL's small built-in pool, so long channel lists can't exhaust
