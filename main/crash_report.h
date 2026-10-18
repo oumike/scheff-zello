@@ -13,6 +13,8 @@
 // the recent log, since that needs no crash at all.
 
 #include <stdbool.h>
+#include <stdio.h>
+#include "esp_err.h"
 
 // Hooks logging and takes the previous boot's log if it ended in a crash.
 // Call first thing in app_main.
@@ -29,3 +31,16 @@ void crash_report_disconnect(const char *why);
 // Console: prints the reset reason and report status, retrying a pending
 // crash report.
 void crash_report_print_status(void);
+
+// Web config: every report file on the card. Fails if there is no card.
+typedef void (*crash_report_file_cb)(void *ctx, const char *name, long size);
+esp_err_t crash_report_list(crash_report_file_cb cb, void *ctx);
+
+// Opens a report by its file name for reading; NULL for a missing or invalid
+// name.
+FILE *crash_report_open(const char *name);
+
+// Deletes every report; returns how many files went.
+int crash_report_delete_all(void);
+
+const char *crash_report_last_reset(void);

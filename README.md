@@ -287,7 +287,8 @@ to the microSD card's `crash/` folder:
 
 An unexpected drop of a signed-in Zello session (or the server closing it) writes
 `NNNN-disconnect.txt` with the socket/TLS error details and the recent log; at
-most one every 30 s and 50 per boot. With no card in, the core dump stays in
+most one every 30 s and 50 per boot. The web config's **Crash reports** section lists
+the files on the card and downloads or deletes them, so the card can stay in. With no card in, the core dump stays in
 flash until `crash` or the next report saves it.
 
 ## Licence

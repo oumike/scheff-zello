@@ -13,6 +13,7 @@
 #include "esp_log.h"
 #include "audio.h"
 #include "channel_list.h"
+#include "crash_report.h"
 #include "net_wifi.h"
 #include "onboard.h"
 #include "sdcard.h"
@@ -841,6 +842,61 @@ static esp_err_t h_sd_import(httpd_req_t *req)
     return err;
 }
 
+// ---- crash reports ---------------------------------------------------------
+
+static void crash_list_add(void *ctx, const char *name, long size)
+{
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "name", name);
+    cJSON_AddNumberToObject(o, "size", size);
+    cJSON_AddItemToArray(ctx, o);
+}
+
+// GET /api/crash: the last reset reason and every report file.
+static esp_err_t h_crash_list(httpd_req_t *req)
+{
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "last_reset", crash_report_last_reset());
+    cJSON *files = cJSON_AddArrayToObject(root, "files");
+    cJSON_AddBoolToObject(root, "sd", crash_report_list(crash_list_add, files) == ESP_OK);
+    return send_json(req, root);
+}
+
+// GET /api/crash/file?name=NNNN-crash.txt: one report as a download.
+static esp_err_t h_crash_file(httpd_req_t *req)
+{
+    char query[96], name[48];
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
+        httpd_query_key_value(query, "name", name, sizeof(name)) != ESP_OK) {
+        return send_error(req, "400 Bad Request", "No report named.");
+    }
+    FILE *f = crash_report_open(name);
+    if (!f) return send_error(req, "404 Not Found", "No such report.");
+
+    char disp[96];
+    snprintf(disp, sizeof(disp), "attachment; filename=\"%s\"", name);
+    bool elf = strstr(name, ".elf") != NULL;
+    httpd_resp_set_type(req, elf ? "application/octet-stream" : "text/plain; charset=utf-8");
+    httpd_resp_set_hdr(req, "Content-Disposition", disp);
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    char *buf = malloc(4096);
+    esp_err_t err = buf ? ESP_OK : ESP_ERR_NO_MEM;
+    size_t n;
+    while (err == ESP_OK && (n = fread(buf, 1, 4096, f)) > 0) err = httpd_resp_send_chunk(req, buf, n);
+    free(buf);
+    fclose(f);
+    if (err != ESP_OK) return err == ESP_ERR_NO_MEM ? httpd_resp_send_500(req) : err;
+    return httpd_resp_send_chunk(req, NULL, 0);
+}
+
+// POST /api/crash/delete: removes every report.
+static esp_err_t h_crash_delete(httpd_req_t *req)
+{
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "deleted", crash_report_delete_all());
+    return send_json(req, root);
+}
+
 // ---- hotspot lifetime ------------------------------------------------------
 
 // The hotspot goes as soon as station Wi-Fi has an address; from then on the
@@ -864,7 +920,7 @@ static void onboard_changed(void)
 esp_err_t web_config_start(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.max_uri_handlers = 20;
+    cfg.max_uri_handlers = 24;
     cfg.lru_purge_enable = true;
     cfg.stack_size = 6144;
     esp_err_t e = httpd_start(&s_httpd, &cfg);
@@ -891,6 +947,9 @@ esp_err_t web_config_start(void)
         {.uri = "/api/import", .method = HTTP_POST, .handler = h_import_upload},
         {.uri = "/api/sd/export", .method = HTTP_POST, .handler = h_sd_export},
         {.uri = "/api/sd/import", .method = HTTP_POST, .handler = h_sd_import},
+        {.uri = "/api/crash", .method = HTTP_GET, .handler = h_crash_list},
+        {.uri = "/api/crash/file", .method = HTTP_GET, .handler = h_crash_file},
+        {.uri = "/api/crash/delete", .method = HTTP_POST, .handler = h_crash_delete},
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) httpd_register_uri_handler(s_httpd, &uris[i]);
 

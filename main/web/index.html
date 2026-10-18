@@ -149,6 +149,18 @@ button:disabled{opacity:.5;cursor:default}
   <button id="sdi" class="plain" type="button">Import from SD card</button>
   <div id="bmsg" class="msg"></div>
 </section>
+
+<section id="s-crash">
+  <h2>Crash reports</h2>
+  <p class="hint">Written after a crash, watchdog or brownout reset, and when the Zello connection drops unexpectedly. They are saved to the microSD card's crash folder. Core dumps (.elf) need the matching firmware.elf to read.</p>
+  <div id="crashinfo"></div>
+  <div id="crashlist"></div>
+  <div class="two">
+    <button id="crashref" class="plain" type="button">Refresh</button>
+    <button id="crashdel" class="stop" type="button">Delete all</button>
+  </div>
+  <div id="xmsg" class="msg"></div>
+</section>
 <div id="savebar">
   <div id="smsg" class="msg"></div>
   <button id="save" class="go" type="button" disabled>No unsaved changes</button>
@@ -383,8 +395,27 @@ $('sdi').onclick=async()=>{
     markClean();filled=false;audioFilled=false;refresh();loadChannels()}
   catch(e){msg($('bmsg'),'err',e.message)}
 };
+// ---- crash reports ----
+async function loadCrash(){
+  $('crashlist').innerHTML='<p class="hint">Loading…</p>';
+  try{const j=await api('/api/crash');
+    $('crashinfo').innerHTML=row('Last reset',esc(j.last_reset));
+    const files=j.files.sort((a,b)=>b.name.localeCompare(a.name));
+    $('crashlist').innerHTML=files.length?files.map(f=>
+      '<div class="chan"><div><b>'+esc(f.name)+'</b><small>'+(f.size>=1024?Math.round(f.size/1024)+' KB':f.size+' bytes')+'</small></div><div class="acts">'+
+      '<a href="/api/crash/file?name='+encodeURIComponent(f.name)+'" download="'+esc(f.name)+'"><button class="go" type="button">Download</button></a>'+
+      '</div></div>').join(''):'<p class="hint">'+(j.sd?'No reports.':'No microSD card found.')+'</p>';
+  }catch(e){$('crashlist').innerHTML='<p class="hint">'+esc(e.message)+'</p>'}
+}
+$('crashref').onclick=loadCrash;
+$('crashdel').onclick=async()=>{
+  if(!confirm('Delete every crash report?'))return;
+  try{const j=await api('/api/crash/delete',{});msg($('xmsg'),'ok','Deleted '+j.deleted+' file'+(j.deleted===1?'':'s')+'.');loadCrash()}
+  catch(e){msg($('xmsg'),'err',e.message)}
+};
 showNetworkFields();
 loadChannels();
+loadCrash();
 refresh();setInterval(refresh,2000);
 refreshLog();setInterval(refreshLog,2000);
 </script>

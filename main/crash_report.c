@@ -437,3 +437,75 @@ void crash_report_print_status(void)
     printf("Reports written this boot: %d%s%s\n", s_reports_written, s_last_report[0] ? ", last " : "",
            s_last_report);
 }
+
+// ---- web access -------------------------------------------------------------
+
+// NNNN-word.txt or NNNN-word.elf, nothing else: the name becomes a path.
+static bool valid_name(const char *name)
+{
+    size_t len = strlen(name);
+    if (len < 10 || len > 40) return false;
+    for (int i = 0; i < 4; i++) {
+        if (name[i] < '0' || name[i] > '9') return false;
+    }
+    if (name[4] != '-') return false;
+    const char *dot = strrchr(name, '.');
+    if (!dot || (strcmp(dot, ".txt") && strcmp(dot, ".elf"))) return false;
+    for (const char *p = name + 5; p < dot; p++) {
+        if (*p < 'a' || *p > 'z') return false;
+    }
+    return dot > name + 5;
+}
+
+esp_err_t crash_report_list(crash_report_file_cb cb, void *ctx)
+{
+    xSemaphoreTake(s_report_lock, portMAX_DELAY);
+    esp_err_t err = sdcard_mount();
+    DIR *d = err == ESP_OK ? opendir(CRASH_DIR) : NULL;
+    if (d) {
+        struct dirent *e;
+        char path[300];
+        while ((e = readdir(d))) {
+            if (!valid_name(e->d_name)) continue;
+            struct stat st;
+            snprintf(path, sizeof(path), CRASH_DIR "/%s", e->d_name);
+            if (stat(path, &st) == 0) cb(ctx, e->d_name, (long)st.st_size);
+        }
+        closedir(d);
+    }
+    xSemaphoreGive(s_report_lock);
+    return err;
+}
+
+FILE *crash_report_open(const char *name)
+{
+    if (!valid_name(name) || sdcard_mount() != ESP_OK) return NULL;
+    char path[64];
+    snprintf(path, sizeof(path), CRASH_DIR "/%s", name);
+    return fopen(path, "rb");
+}
+
+int crash_report_delete_all(void)
+{
+    int n = 0;
+    xSemaphoreTake(s_report_lock, portMAX_DELAY);
+    DIR *d = sdcard_mount() == ESP_OK ? opendir(CRASH_DIR) : NULL;
+    if (d) {
+        struct dirent *e;
+        char path[300];
+        while ((e = readdir(d))) {
+            if (!valid_name(e->d_name)) continue;
+            snprintf(path, sizeof(path), CRASH_DIR "/%s", e->d_name);
+            if (remove(path) == 0) n++;
+        }
+        closedir(d);
+    }
+    s_last_report[0] = 0;
+    xSemaphoreGive(s_report_lock);
+    return n;
+}
+
+const char *crash_report_last_reset(void)
+{
+    return reset_reason_name(s_reset_reason);
+}
