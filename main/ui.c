@@ -17,7 +17,7 @@ static const char *TAG = "ui";
 #define STATUS_REFRESH_MS       1000
 #define BATTERY_REFRESH_TICKS   30
 
-static lv_obj_t *s_status_bar, *s_wifi_icon, *s_ap_icon, *s_battery_icon;
+static lv_obj_t *s_status_bar, *s_wifi_icon, *s_ap_icon, *s_battery_icon, *s_battery_pct;
 static lv_obj_t *s_zello_arrows[2];
 static uint8_t s_battery_tick;
 
@@ -90,12 +90,14 @@ static void status_update(lv_timer_t *timer)
     if (s_battery_tick == 0) {
         uint8_t percent;
         if (board_battery_percent(&percent) == ESP_OK) {
+            lv_color_t color = percent <= 10   ? UI_COLOR_STOP
+                               : percent <= 25 ? UI_COLOR_WARN
+                                               : lv_color_white();
             lv_label_set_text(s_battery_icon, battery_symbol(percent));
-            lv_obj_set_style_text_color(s_battery_icon,
-                                        percent <= 10 ? UI_COLOR_STOP
-                                        : percent <= 25 ? UI_COLOR_WARN
-                                                        : lv_color_white(),
-                                        0);
+            lv_obj_set_style_text_color(s_battery_icon, color, 0);
+            lv_label_set_text_fmt(s_battery_pct, "%u%%", (unsigned)percent);
+            lv_obj_set_style_text_color(s_battery_pct, color, 0);
+            lv_obj_remove_flag(s_battery_pct, LV_OBJ_FLAG_HIDDEN);
         }
     }
     s_battery_tick = (s_battery_tick + 1) % BATTERY_REFRESH_TICKS;
@@ -124,6 +126,11 @@ static void status_ensure(void)
         lv_label_set_text(s_ap_icon, LV_SYMBOL_UPLOAD);
         lv_obj_set_style_text_font(s_ap_icon, UI_FONT, 0);
         lv_obj_set_style_text_color(s_ap_icon, UI_COLOR_ACCENT, 0);
+
+        // Hidden until the first reading.
+        s_battery_pct = lv_label_create(s_status_bar);
+        lv_obj_set_style_text_font(s_battery_pct, UI_FONT_SMALL, 0);
+        lv_obj_add_flag(s_battery_pct, LV_OBJ_FLAG_HIDDEN);
 
         s_battery_icon = lv_label_create(s_status_bar);
         lv_label_set_text(s_battery_icon, LV_SYMBOL_BATTERY_EMPTY);

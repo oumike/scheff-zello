@@ -28,7 +28,7 @@
 #define UI_FONT_SMALL (&lv_font_montserrat_8)
 #define UI_FONT       (&lv_font_montserrat_10)
 #define UI_FONT_TITLE (&lv_font_montserrat_12)
-#define UI_STATUS_BAR_W     60
+#define UI_STATUS_BAR_W     84
 #define UI_STATUS_BAR_H     14
 #define UI_SPINNER_SIZE     20
 #define UI_ICON_BUTTON_SIZE 16
@@ -67,7 +67,7 @@
 #define UI_FONT_SMALL (&lv_font_montserrat_20)
 #define UI_FONT       (&lv_font_montserrat_28)
 #define UI_FONT_TITLE (&lv_font_montserrat_36)
-#define UI_STATUS_BAR_W     176
+#define UI_STATUS_BAR_W     240
 #define UI_STATUS_BAR_H     48
 #define UI_SPINNER_SIZE     96
 #define UI_ICON_BUTTON_SIZE 80
