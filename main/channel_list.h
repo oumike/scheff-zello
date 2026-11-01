@@ -43,9 +43,12 @@ size_t channel_list_get(const char *query, bool favorites_only, channel_entry_t 
 
 bool channel_list_find(const char *name, channel_entry_t *out);
 
+// Names are exact, case-sensitive identifiers (search and sorting are not).
 // Adds or replaces an entry and rewrites the file. With `orig_name` set, the
 // entry of that name is replaced, which may rename it; otherwise `entry` is
 // added, replacing any of the same name. ESP_ERR_NO_MEM once the list is full.
+// Renaming onto a different existing entry returns ESP_ERR_INVALID_ARG.
+// A failed save leaves the in-memory list and recoverable old file intact.
 esp_err_t channel_list_put(const char *orig_name, const channel_entry_t *entry);
 
 esp_err_t channel_list_delete(const char *name);
@@ -56,13 +59,14 @@ esp_err_t channel_list_set_favorite(const char *name, bool favorite);
 // shouldn't look like a failure because the flash write didn't take.
 void channel_list_record_join(const char *name);
 
-// Replaces the whole list with the <channel> entries in `xml` and saves it.
-// ESP_ERR_NOT_FOUND if it holds none, in which case nothing changes.
+// Validates the complete XML document and every <channel> entry, then replaces
+// the list and saves it. Malformed/over-capacity input changes nothing and
+// returns ESP_ERR_INVALID_ARG. ESP_ERR_NOT_FOUND for a well-formed empty list.
 esp_err_t channel_list_import_buffer(const char *xml, size_t *count);
 
 // Replaces the whole list with the named entries of `entries` (the first of a
-// repeated name wins) and saves it. ESP_ERR_NOT_FOUND if none has a name, in
-// which case nothing changes.
+// repeated exact name wins) and saves it. Invalid or over-capacity entries
+// change nothing. ESP_ERR_NOT_FOUND for n == 0, also without replacement.
 esp_err_t channel_list_replace(const channel_entry_t *entries, size_t n, size_t *count);
 
 // Appends the list as <channel .../> elements, one per line, indented by

@@ -4,7 +4,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "cJSON.h"
@@ -14,6 +13,7 @@
 #include "audio.h"
 #include "channel_list.h"
 #include "crash_report.h"
+#include "file_store.h"
 #include "net_wifi.h"
 #include "onboard.h"
 #include "sdcard.h"
@@ -28,8 +28,12 @@ static const char *TAG = "web";
 // A developer token is a long JWT, so the account POST is the biggest body we
 // accept by a wide margin.
 #define BODY_MAX   2048
+#define BODY_READ_TIMEOUT_MS 15000
+#define BODY_TIMEOUT_RETRIES 3
 #define SCAN_MAX   30
-#define IMPORT_MAX (64 * 1024)
+// A full legacy XML list can exceed 100 KiB when each string byte is escaped.
+#define IMPORT_MAX (4096 + 6 * sizeof(settings_t) + CHANNEL_LIST_MAX * \
+                    (128 + 6 * (sizeof(((channel_entry_t *)0)->name) + sizeof(((channel_entry_t *)0)->desc))))
 #define BACKUP_FILE_NAME "scheff-zello-backup.yaml"
 #define SD_BACKUP_PATH   SDCARD_MOUNT "/" BACKUP_FILE_NAME
 // Before the rename to Scheff for Zello (and YAML) the SD card backup was
@@ -71,6 +75,15 @@ static esp_err_t send_error(httpd_req_t *req, const char *status, const char *ms
     return send_json(req, root);
 }
 
+static esp_err_t reject_request(httpd_req_t *req, const char *status, const char *msg)
+{
+    httpd_resp_set_hdr(req, "Connection", "close");
+    send_error(req, status, msg);
+    // Returning success would make HTTPD drain the remaining body before it
+    // handles a queued close, defeating our deadline for a slow sender.
+    return ESP_FAIL;
+}
+
 static esp_err_t send_ok(httpd_req_t *req)
 {
     cJSON *root = cJSON_CreateObject();
@@ -78,34 +91,115 @@ static esp_err_t send_ok(httpd_req_t *req)
     return send_json(req, root);
 }
 
-static cJSON *read_json(httpd_req_t *req)
+static esp_err_t read_body(httpd_req_t *req, size_t max, bool external, char **out)
 {
-    if (req->content_len <= 0 || req->content_len > BODY_MAX) return NULL;
-    char *body = malloc(req->content_len + 1);
-    if (!body) return NULL;
-    int got = 0;
-    while (got < req->content_len) {
-        int n = httpd_req_recv(req, body + got, req->content_len - got);
-        if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;
-        if (n <= 0) {
-            free(body);
-            return NULL;
+    *out = NULL;
+    const size_t size = req->content_len;
+    esp_err_t err = ESP_OK;
+    char *body = NULL;
+    if (!size || size > max) {
+        err = ESP_ERR_INVALID_SIZE;
+    } else {
+        body = external ? heap_caps_malloc(size + 1, MALLOC_CAP_SPIRAM) : malloc(size + 1);
+        if (!body) err = ESP_ERR_NO_MEM;
+    }
+
+    size_t got = 0;
+    unsigned timeouts = 0;
+    TickType_t started = xTaskGetTickCount();
+    while (err == ESP_OK && got < size) {
+        if ((TickType_t)(xTaskGetTickCount() - started) >= pdMS_TO_TICKS(BODY_READ_TIMEOUT_MS)) {
+            err = ESP_ERR_TIMEOUT;
+            break;
         }
-        got += n;
+        int n = httpd_req_recv(req, body + got, req->content_len - got);
+        if (n == HTTPD_SOCK_ERR_TIMEOUT) {
+            if (++timeouts < BODY_TIMEOUT_RETRIES) continue;
+            err = ESP_ERR_TIMEOUT;
+        } else if (n <= 0 || (size_t)n > size - got) {
+            err = ESP_FAIL;
+        } else {
+            got += (size_t)n;
+        }
+    }
+    if (err == ESP_OK &&
+        (TickType_t)(xTaskGetTickCount() - started) >= pdMS_TO_TICKS(BODY_READ_TIMEOUT_MS)) err = ESP_ERR_TIMEOUT;
+    if (err == ESP_OK && memchr(body, 0, got)) err = ESP_ERR_INVALID_ARG;
+    if (err != ESP_OK) {
+        if (body) memset(body, 0, size + 1);
+        free(body);
+        return err;
     }
     body[got] = 0;
-    cJSON *j = cJSON_Parse(body);
+    *out = body;
+    return ESP_OK;
+}
+
+static cJSON *read_json(httpd_req_t *req)
+{
+    char *body = NULL;
+    if (read_body(req, BODY_MAX, false, &body) != ESP_OK) return NULL;
+    size_t size = req->content_len;
+    bool valid = true, in_string = false;
+    for (size_t i = 0; i < size; i++) {
+        unsigned char c = (unsigned char)body[i];
+        if (in_string && c == '\\') {
+            // cJSON represents strings with C terminators, so a decoded NUL
+            // would silently change an identifier (or even an object key).
+            if (i + 5 < size && !memcmp(body + i + 1, "u0000", 5)) valid = false;
+            i++;
+        } else if (c == '"') {
+            in_string = !in_string;
+        } else if (c < 0x20 && (in_string || (c != '\t' && c != '\r' && c != '\n'))) {
+            valid = false;
+        }
+    }
+    const char *end = NULL;
+    cJSON *j = valid ? cJSON_ParseWithLengthOpts(body, size + 1, &end, false) : NULL;
+    if (j) {
+        while (end < body + size && (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n')) end++;
+        if (end != body + size || !cJSON_IsObject(j)) {
+            cJSON_Delete(j);
+            j = NULL;
+        }
+    }
     // The token and the passwords passed through here; don't leave them in the
     // heap for whatever allocates this block next.
-    memset(body, 0, got);
+    memset(body, 0, size);
     free(body);
     return j;
+}
+
+static esp_err_t check_empty_body(httpd_req_t *req, bool allow_json)
+{
+    if (!req->content_len) return ESP_OK;
+    // Command buttons post {}, while GET handlers never accept a body.
+    cJSON *j = allow_json ? read_json(req) : NULL;
+    bool empty_object = j && cJSON_GetArraySize(j) == 0;
+    cJSON_Delete(j);
+    if (empty_object) return ESP_OK;
+    return reject_request(req, "400 Bad Request",
+                          allow_json ? "Send an empty body or an empty JSON object."
+                                     : "This request does not accept a body.");
 }
 
 static const char *json_str(cJSON *obj, const char *key)
 {
     cJSON *v = cJSON_GetObjectItemCaseSensitive(obj, key);
     return cJSON_IsString(v) ? v->valuestring : "";
+}
+
+static bool json_string_field(cJSON *obj, const char *key, size_t size, bool required, const char **out)
+{
+    cJSON *v = cJSON_GetObjectItemCaseSensitive(obj, key);
+    if (!v && !required) {
+        *out = "";
+        return true;
+    }
+    if (!cJSON_IsString(v) || !v->valuestring || strlen(v->valuestring) >= size ||
+        (required && !v->valuestring[0])) return false;
+    *out = v->valuestring;
+    return true;
 }
 
 // ---- backup ----------------------------------------------------------------
@@ -209,7 +303,7 @@ static esp_err_t backup_yaml_value(void *ctx, const char *section, int item, con
         if (!key) return ESP_OK;
         if (item < 0) return ESP_ERR_INVALID_ARG;  // a map where the list should be
         if (b->count == 0 || item != b->item) {
-            if (b->count == CHANNEL_LIST_MAX) return ESP_OK;  // the rest will not fit anyway
+            if (b->count == CHANNEL_LIST_MAX) return ESP_ERR_INVALID_ARG;
             memset(&b->channels[b->count++], 0, sizeof(b->channels[0]));
             b->item = item;
         }
@@ -235,7 +329,7 @@ static esp_err_t backup_parse_settings_xml(const char *xml, settings_t *settings
     const char *element = xml_find_element(xml, "settings");
     *found = element != NULL;
     if (!element) return ESP_OK;
-    const char *end = strchr(element, '>');
+    const char *end = xml_element_end(element);
     if (!end) return ESP_ERR_INVALID_ARG;
 
     char value[16];
@@ -312,6 +406,7 @@ static esp_err_t backup_apply_settings(const settings_t *settings, bool *wifi_ch
 
 static esp_err_t h_index(httpd_req_t *req)
 {
+    if (check_empty_body(req, false) != ESP_OK) return ESP_FAIL;
     httpd_resp_set_type(req, "text/html");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     return httpd_resp_send(req, index_html_start, index_html_end - index_html_start - 1);
@@ -319,6 +414,7 @@ static esp_err_t h_index(httpd_req_t *req)
 
 static esp_err_t h_status(httpd_req_t *req)
 {
+    if (check_empty_body(req, false) != ESP_OK) return ESP_FAIL;
     zello_status_t zs;
     zello_get_status(&zs);
 
@@ -373,6 +469,7 @@ static esp_err_t h_status(httpd_req_t *req)
 
 static esp_err_t h_log(httpd_req_t *req)
 {
+    if (check_empty_body(req, false) != ESP_OK) return ESP_FAIL;
     char *log = malloc(ZELLO_LOG_MAX);
     if (!log) return httpd_resp_send_500(req);
     zello_get_log(log, ZELLO_LOG_MAX);
@@ -384,6 +481,7 @@ static esp_err_t h_log(httpd_req_t *req)
 
 static esp_err_t h_scan(httpd_req_t *req)
 {
+    if (check_empty_body(req, false) != ESP_OK) return ESP_FAIL;
     net_wifi_ap_t *aps = calloc(SCAN_MAX, sizeof(*aps));
     if (!aps) return httpd_resp_send_500(req);
     int n = net_wifi_scan(aps, SCAN_MAX);
@@ -427,7 +525,7 @@ static void join_task(void *arg)
 static esp_err_t h_wifi(httpd_req_t *req)
 {
     cJSON *j = read_json(req);
-    if (!j) return send_error(req, "400 Bad Request", "Bad request.");
+    if (!j) return reject_request(req, "400 Bad Request", "Bad request.");
     const char *ssid = json_str(j, "ssid");
     if (!ssid[0] || strlen(ssid) > 32) {
         cJSON_Delete(j);
@@ -456,7 +554,7 @@ static esp_err_t h_wifi(httpd_req_t *req)
 static esp_err_t h_account(httpd_req_t *req)
 {
     cJSON *j = read_json(req);
-    if (!j) return send_error(req, "400 Bad Request", "Bad request.");
+    if (!j) return reject_request(req, "400 Bad Request", "Bad request.");
     const char *err = NULL;
     // A blank password or token keeps the stored one; the page never sees
     // either, so it cannot echo them back.
@@ -470,7 +568,7 @@ static esp_err_t h_account(httpd_req_t *req)
 static esp_err_t h_audio(httpd_req_t *req)
 {
     cJSON *j = read_json(req);
-    if (!j) return send_error(req, "400 Bad Request", "Bad request.");
+    if (!j) return reject_request(req, "400 Bad Request", "Bad request.");
     cJSON *volume = cJSON_GetObjectItemCaseSensitive(j, "volume");
     cJSON *gain = cJSON_GetObjectItemCaseSensitive(j, "mic_gain");
     cJSON *latch = cJSON_GetObjectItemCaseSensitive(j, "ptt_latch");
@@ -493,31 +591,46 @@ static esp_err_t h_audio(httpd_req_t *req)
 // ---- channels --------------------------------------------------------------
 
 // Decodes %XX and '+' in a query value, in place.
-static void url_decode(char *s)
+static bool url_decode(char *s)
 {
     char *o = s;
     for (; *s; s++) {
         if (*s == '+') {
             *o++ = ' ';
-        } else if (*s == '%' && isxdigit((unsigned char)s[1]) && isxdigit((unsigned char)s[2])) {
+        } else if (*s == '%') {
+            if (!isxdigit((unsigned char)s[1]) || !isxdigit((unsigned char)s[2])) return false;
             char hex[3] = {s[1], s[2], 0};
-            *o++ = (char)strtol(hex, NULL, 16);
+            char decoded = (char)strtol(hex, NULL, 16);
+            if (!decoded) return false;
+            *o++ = decoded;
             s += 2;
         } else {
             *o++ = *s;
         }
     }
     *o = 0;
+    return true;
 }
 
 // GET /api/channels[?q=text]
 static esp_err_t h_channels(httpd_req_t *req)
 {
-    char qs[128] = "", query[64] = "";
-    if (httpd_req_get_url_query_str(req, qs, sizeof(qs)) == ESP_OK) {
-        if (httpd_query_key_value(qs, "q", query, sizeof(query)) != ESP_OK) query[0] = 0;
+    if (check_empty_body(req, false) != ESP_OK) return ESP_FAIL;
+    enum { QUERY_MAX = sizeof(((channel_entry_t *)0)->name) - 1 };
+    char qs[3 * QUERY_MAX + 3] = "", query[sizeof(qs)] = "";
+    esp_err_t err = httpd_req_get_url_query_str(req, qs, sizeof(qs));
+    if (err != ESP_OK && err != ESP_ERR_NOT_FOUND) {
+        return send_error(req, "400 Bad Request", "The channel search is too long or invalid.");
     }
-    url_decode(query);
+    if (err == ESP_OK) {
+        err = httpd_query_key_value(qs, "q", query, sizeof(query));
+        if (err != ESP_OK && err != ESP_ERR_NOT_FOUND) {
+            return send_error(req, "400 Bad Request", "The channel search is too long or invalid.");
+        }
+    }
+    if (!url_decode(query) || strlen(query) > QUERY_MAX) {
+        return send_error(req, "400 Bad Request", "The channel search must fit in 64 UTF-8 bytes.");
+    }
 
     channel_entry_t *list = calloc(CHANNEL_LIST_MAX, sizeof(*list));
     if (!list) return httpd_resp_send_500(req);
@@ -530,7 +643,7 @@ static esp_err_t h_channels(httpd_req_t *req)
         cJSON_AddStringToObject(o, "desc", list[i].desc);
         cJSON_AddNumberToObject(o, "uses", list[i].uses);
         cJSON_AddBoolToObject(o, "favorite", list[i].favorite);
-        cJSON_AddBoolToObject(o, "current", !strcasecmp(list[i].name, g_settings.channel));
+        cJSON_AddBoolToObject(o, "current", !strcmp(list[i].name, g_settings.channel));
         cJSON_AddItemToArray(arr, o);
     }
     free(list);
@@ -541,18 +654,25 @@ static esp_err_t h_channels(httpd_req_t *req)
 static esp_err_t h_channel_save(httpd_req_t *req)
 {
     cJSON *j = read_json(req);
-    if (!j) return send_error(req, "400 Bad Request", "Bad request.");
-    char orig[sizeof(((channel_entry_t *)0)->name)];
-    strlcpy(orig, json_str(j, "orig_name"), sizeof(orig));
-
+    if (!j) return reject_request(req, "400 Bad Request", "Bad request.");
     channel_entry_t entry = {0};
+    const char *orig, *name, *desc, *error = NULL;
+    if (!json_string_field(j, "name", sizeof(entry.name), true, &name)) {
+        error = "A channel name of 1 to 64 UTF-8 bytes is required.";
+    } else if (!json_string_field(j, "orig_name", sizeof(entry.name), false, &orig)) {
+        error = "The original channel name must be a string of at most 64 UTF-8 bytes.";
+    } else if (!json_string_field(j, "desc", sizeof(entry.desc), false, &desc)) {
+        error = "The channel note must be a string of at most 63 UTF-8 bytes.";
+    }
+    if (error) {
+        cJSON_Delete(j);
+        return send_error(req, "400 Bad Request", error);
+    }
     if (orig[0]) channel_list_find(orig, &entry);  // keep the favorite flag and use count
-    strlcpy(entry.name, json_str(j, "name"), sizeof(entry.name));
-    strlcpy(entry.desc, json_str(j, "desc"), sizeof(entry.desc));
-    cJSON_Delete(j);
-
-    if (!entry.name[0]) return send_error(req, "400 Bad Request", "A channel name is required.");
+    strlcpy(entry.name, name, sizeof(entry.name));
+    strlcpy(entry.desc, desc, sizeof(entry.desc));
     esp_err_t err = channel_list_put(orig[0] ? orig : NULL, &entry);
+    cJSON_Delete(j);
     if (err == ESP_ERR_NO_MEM) {
         return send_error(req, "400 Bad Request", "The channel list is full. Delete one first.");
     }
@@ -564,11 +684,14 @@ static esp_err_t h_channel_save(httpd_req_t *req)
 static esp_err_t h_channel_delete(httpd_req_t *req)
 {
     cJSON *j = read_json(req);
-    if (!j) return send_error(req, "400 Bad Request", "Bad request.");
-    char name[sizeof(((channel_entry_t *)0)->name)];
-    strlcpy(name, json_str(j, "name"), sizeof(name));
-    cJSON_Delete(j);
+    if (!j) return reject_request(req, "400 Bad Request", "Bad request.");
+    const char *name;
+    if (!json_string_field(j, "name", sizeof(((channel_entry_t *)0)->name), true, &name)) {
+        cJSON_Delete(j);
+        return send_error(req, "400 Bad Request", "A channel name of 1 to 64 UTF-8 bytes is required.");
+    }
     esp_err_t err = channel_list_delete(name);
+    cJSON_Delete(j);
     if (err == ESP_ERR_NOT_FOUND) return send_error(req, "404 Not Found", "No such channel.");
     if (err != ESP_OK) return send_error(req, "500 Internal Server Error", "Couldn't save the channel list.");
     return send_ok(req);
@@ -578,12 +701,17 @@ static esp_err_t h_channel_delete(httpd_req_t *req)
 static esp_err_t h_channel_favorite(httpd_req_t *req)
 {
     cJSON *j = read_json(req);
-    if (!j) return send_error(req, "400 Bad Request", "Bad request.");
-    char name[sizeof(((channel_entry_t *)0)->name)];
-    strlcpy(name, json_str(j, "name"), sizeof(name));
-    bool fav = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j, "favorite"));
-    cJSON_Delete(j);
+    if (!j) return reject_request(req, "400 Bad Request", "Bad request.");
+    const char *name;
+    cJSON *favorite = cJSON_GetObjectItemCaseSensitive(j, "favorite");
+    if (!json_string_field(j, "name", sizeof(((channel_entry_t *)0)->name), true, &name) ||
+        !cJSON_IsBool(favorite)) {
+        cJSON_Delete(j);
+        return send_error(req, "400 Bad Request", "A channel name of 1 to 64 UTF-8 bytes and a boolean favorite are required.");
+    }
+    bool fav = cJSON_IsTrue(favorite);
     esp_err_t err = channel_list_set_favorite(name, fav);
+    cJSON_Delete(j);
     if (err == ESP_ERR_NOT_FOUND) return send_error(req, "404 Not Found", "No such channel.");
     if (err != ESP_OK) return send_error(req, "500 Internal Server Error", "Couldn't save the channel list.");
     cJSON *root = cJSON_CreateObject();
@@ -595,13 +723,16 @@ static esp_err_t h_channel_favorite(httpd_req_t *req)
 static esp_err_t h_channel_join(httpd_req_t *req)
 {
     cJSON *j = read_json(req);
-    if (!j) return send_error(req, "400 Bad Request", "Bad request.");
-    char name[sizeof(((channel_entry_t *)0)->name)];
-    strlcpy(name, json_str(j, "name"), sizeof(name));
-    cJSON_Delete(j);
-
+    if (!j) return reject_request(req, "400 Bad Request", "Bad request.");
+    const char *name;
+    if (!json_string_field(j, "name", sizeof(((channel_entry_t *)0)->name), true, &name)) {
+        cJSON_Delete(j);
+        return send_error(req, "400 Bad Request", "A channel name of 1 to 64 UTF-8 bytes is required.");
+    }
     const char *err = NULL;
-    if (onboard_save_channel(name, &err) != ESP_OK) {
+    esp_err_t result = onboard_save_channel(name, &err);
+    cJSON_Delete(j);
+    if (result != ESP_OK) {
         return send_error(req, "400 Bad Request", err ? err : "Couldn't join that channel.");
     }
     return send_ok(req);
@@ -611,7 +742,7 @@ static esp_err_t h_channel_join(httpd_req_t *req)
 static esp_err_t h_text(httpd_req_t *req)
 {
     cJSON *j = read_json(req);
-    if (!j) return send_error(req, "400 Bad Request", "Bad request.");
+    if (!j) return reject_request(req, "400 Bad Request", "Bad request.");
     char text[257];
     strlcpy(text, json_str(j, "text"), sizeof(text));
     cJSON_Delete(j);
@@ -636,6 +767,7 @@ static esp_err_t backup_file_write(void *ctx, const char *data, size_t len)
 // GET /api/export: all settings and the channel list as one download.
 static esp_err_t h_export_download(httpd_req_t *req)
 {
+    if (check_empty_body(req, false) != ESP_OK) return ESP_FAIL;
     httpd_resp_set_type(req, "application/yaml");
     httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"" BACKUP_FILE_NAME "\"");
     esp_err_t err = backup_write(backup_http_write, req);
@@ -717,9 +849,13 @@ static esp_err_t import_backup(httpd_req_t *req, const char *text, const char *w
     const char *p = text;
     while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
     if (!strncmp(p, "\xEF\xBB\xBF", 3)) p += 3;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
     if (*p != '<') return import_yaml(req, text, what);
 
     const char *xml = text;
+    if (xml_validate_document(xml) != ESP_OK) {
+        return send_error(req, "400 Bad Request", "The XML backup is malformed; nothing was changed.");
+    }
     settings_t restored;
     bool has_settings;
     esp_err_t err = backup_parse_settings_xml(xml, &restored, &has_settings);
@@ -731,43 +867,43 @@ static esp_err_t import_backup(httpd_req_t *req, const char *text, const char *w
                           "The backup settings are incomplete or invalid; nothing was changed.");
     }
 
-    size_t count = 0;
+    size_t count = channel_list_count();
     err = channel_list_import_buffer(xml, &count);
-    if (err == ESP_ERR_NOT_FOUND) {
+    bool channels_replaced = err == ESP_OK;
+    if (err == ESP_ERR_NOT_FOUND && !has_settings) {
         return send_error(req, "400 Bad Request", "That file has no <channel> entries; nothing was changed.");
     }
-    if (err != ESP_OK) return send_error(req, "500 Internal Server Error", "Import failed; nothing was changed.");
+    if (err != ESP_OK && err != ESP_ERR_NOT_FOUND) {
+        return send_error(req, err == ESP_ERR_INVALID_ARG ? "400 Bad Request" : "500 Internal Server Error",
+                          "Import failed; nothing was changed.");
+    }
+    if (!channels_replaced) count = channel_list_count();
 
     bool wifi_changed = false, reconnecting = false;
     if (has_settings && backup_apply_settings(&restored, &wifi_changed, &reconnecting) != ESP_OK) {
         return send_error(req, "500 Internal Server Error",
-                          "The channel list was restored, but the settings could not be saved.");
+                          channels_replaced ? "The channel list was restored, but the settings could not be saved."
+                                            : "The settings could not be saved.");
     }
 
-    return import_result(req, count, what, has_settings, true, wifi_changed, reconnecting);
+    return import_result(req, count, what, has_settings, channels_replaced, wifi_changed, reconnecting);
 }
 
 // POST /api/import: the body is a complete backup, or just a channel list.
 static esp_err_t h_import_upload(httpd_req_t *req)
 {
-    if (req->content_len <= 0 || req->content_len > IMPORT_MAX) {
-        return send_error(req, "400 Bad Request", "That file is empty or too large.");
+    char *buf = NULL;
+    esp_err_t err = read_body(req, IMPORT_MAX, true, &buf);
+    if (err == ESP_ERR_INVALID_SIZE) {
+        return reject_request(req, "400 Bad Request", "That file is empty or too large.");
     }
-    char *buf = heap_caps_malloc(req->content_len + 1, MALLOC_CAP_SPIRAM);
-    if (!buf) return httpd_resp_send_500(req);
-    int got = 0;
-    while (got < req->content_len) {
-        int n = httpd_req_recv(req, buf + got, req->content_len - got);
-        if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;
-        if (n <= 0) {
-            free(buf);
-            return ESP_FAIL;
-        }
-        got += n;
+    if (err == ESP_ERR_NO_MEM) return reject_request(req, "500 Internal Server Error", "Not enough memory for the upload.");
+    if (err == ESP_ERR_TIMEOUT) return reject_request(req, "408 Request Timeout", "The upload timed out.");
+    if (err != ESP_OK) {
+        return reject_request(req, "400 Bad Request", "The upload is incomplete or contains a NUL byte.");
     }
-    buf[got] = 0;
-    esp_err_t err = import_backup(req, buf, "upload");
-    memset(buf, 0, got);  // the backup carries the passwords and the token
+    err = import_backup(req, buf, "upload");
+    memset(buf, 0, req->content_len);  // the backup carries the passwords and the token
     free(buf);
     return err;
 }
@@ -781,13 +917,19 @@ static esp_err_t sd_error(httpd_req_t *req)
 // microSD card.
 static esp_err_t h_sd_export(httpd_req_t *req)
 {
+    if (check_empty_body(req, true) != ESP_OK) return ESP_FAIL;
     if (sdcard_mount() != ESP_OK) return sd_error(req);
-    FILE *file = fopen(SD_BACKUP_PATH, "w");
+    if (file_store_recover(SD_BACKUP_PATH) != ESP_OK) {
+        return send_error(req, "500 Internal Server Error", "Couldn't recover the SD card backup.");
+    }
+    FILE *file = fopen(SD_BACKUP_PATH ".tmp", "w");
     if (!file) return send_error(req, "500 Internal Server Error", "Couldn't write to the SD card.");
     esp_err_t err = backup_write(backup_file_write, file);
+    if (err == ESP_OK && fflush(file) != 0) err = ESP_FAIL;
     if (fclose(file) != 0) err = ESP_FAIL;
+    if (err == ESP_OK) err = file_store_commit(SD_BACKUP_PATH);
     if (err != ESP_OK) {
-        remove(SD_BACKUP_PATH);
+        remove(SD_BACKUP_PATH ".tmp");
         return send_error(req, "500 Internal Server Error", "Couldn't write to the SD card.");
     }
     cJSON *root = cJSON_CreateObject();
@@ -799,14 +941,23 @@ static esp_err_t h_sd_export(httpd_req_t *req)
 
 static esp_err_t backup_read_file(const char *path, char **out)
 {
+    *out = NULL;
+    esp_err_t err = file_store_recover(path);
+    if (err != ESP_OK) return err;
     FILE *file = fopen(path, "r");
     if (!file) return ESP_ERR_NOT_FOUND;
-    fseek(file, 0, SEEK_END);
+    if (fseek(file, 0, SEEK_END) != 0) {
+        fclose(file);
+        return ESP_FAIL;
+    }
     long size = ftell(file);
-    fseek(file, 0, SEEK_SET);
-    if (size <= 0 || size > IMPORT_MAX) {
+    if (size <= 0 || (size_t)size > IMPORT_MAX) {
         fclose(file);
         return ESP_ERR_INVALID_SIZE;
+    }
+    if (fseek(file, 0, SEEK_SET) != 0) {
+        fclose(file);
+        return ESP_FAIL;
     }
     char *data = heap_caps_malloc(size + 1, MALLOC_CAP_SPIRAM);
     if (!data) {
@@ -815,10 +966,12 @@ static esp_err_t backup_read_file(const char *path, char **out)
     }
     size_t got = fread(data, 1, size, file);
     bool ok = got == (size_t)size && !ferror(file);
-    fclose(file);
-    if (!ok) {
+    if (fclose(file) != 0) ok = false;
+    err = !ok ? ESP_FAIL : memchr(data, 0, got) ? ESP_ERR_INVALID_ARG : ESP_OK;
+    if (err != ESP_OK) {
+        memset(data, 0, size + 1);
         free(data);
-        return ESP_FAIL;
+        return err;
     }
     data[got] = 0;
     *out = data;
@@ -827,6 +980,7 @@ static esp_err_t backup_read_file(const char *path, char **out)
 
 static esp_err_t h_sd_import(httpd_req_t *req)
 {
+    if (check_empty_body(req, true) != ESP_OK) return ESP_FAIL;
     if (sdcard_mount() != ESP_OK) return sd_error(req);
     char *text = NULL;
     esp_err_t err = backup_read_file(SD_BACKUP_PATH, &text);
@@ -835,6 +989,7 @@ static esp_err_t h_sd_import(httpd_req_t *req)
         return send_error(req, "404 Not Found", "No " BACKUP_FILE_NAME " on the SD card.");
     }
     if (err == ESP_ERR_INVALID_SIZE) return send_error(req, "400 Bad Request", "That file is empty or too large.");
+    if (err == ESP_ERR_INVALID_ARG) return send_error(req, "400 Bad Request", "The backup contains a NUL byte.");
     if (err != ESP_OK) return send_error(req, "500 Internal Server Error", "Couldn't read the SD card backup.");
     err = import_backup(req, text, "sd");
     memset(text, 0, strlen(text));
@@ -855,6 +1010,7 @@ static void crash_list_add(void *ctx, const char *name, long size)
 // GET /api/crash: the last reset reason and every report file.
 static esp_err_t h_crash_list(httpd_req_t *req)
 {
+    if (check_empty_body(req, false) != ESP_OK) return ESP_FAIL;
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "last_reset", crash_report_last_reset());
     cJSON *files = cJSON_AddArrayToObject(root, "files");
@@ -865,6 +1021,7 @@ static esp_err_t h_crash_list(httpd_req_t *req)
 // GET /api/crash/file?name=NNNN-crash.txt: one report as a download.
 static esp_err_t h_crash_file(httpd_req_t *req)
 {
+    if (check_empty_body(req, false) != ESP_OK) return ESP_FAIL;
     char query[96], name[48];
     if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
         httpd_query_key_value(query, "name", name, sizeof(name)) != ESP_OK) {
@@ -892,6 +1049,7 @@ static esp_err_t h_crash_file(httpd_req_t *req)
 // POST /api/crash/delete: removes every report.
 static esp_err_t h_crash_delete(httpd_req_t *req)
 {
+    if (check_empty_body(req, true) != ESP_OK) return ESP_FAIL;
     cJSON *root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "deleted", crash_report_delete_all());
     return send_json(req, root);

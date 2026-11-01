@@ -83,6 +83,15 @@ PlatformIO fetches and manages ESP-IDF itself; no separate install is needed.
 ./scripts/build-upload-monitor.sh --help     # every option
 ```
 
+ESP-IDF's framework and build directories must resolve to paths without spaces.
+The helper falls back to `~/.cache/scheff-zello/platformio` if its default core
+resolves through a symlink to a path containing spaces. Explicit paths can be
+set with `ZELLO_PIO_CORE_DIR` and `ZELLO_BUILD_DIR`.
+
+Host-side correctness regressions run with `python3 -m unittest discover -s tests -v`
+(Python 3, a C compiler, Node.js, and the ESP-IDF framework fetched by PlatformIO;
+no device is accessed).
+
 The T-Display-P4 is the default board; `--tdeck` selects the T-Deck and
 `--wio-tracker-l2` the Wio Tracker L2. Each board
 builds into its own directory. Add `--fullclean` (`-F`) the first time you build

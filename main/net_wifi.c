@@ -1,6 +1,7 @@
 #include "net_wifi.h"
 
 #include <stdio.h>
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 #include "sdkconfig.h"
@@ -125,10 +126,24 @@ esp_err_t net_wifi_init(void)
 
 esp_err_t net_wifi_connect(const char *ssid, const char *pass)
 {
-    if (!ssid || !*ssid) return ESP_ERR_INVALID_ARG;
     wifi_config_t wc = {0};
-    strlcpy((char *)wc.sta.ssid, ssid, sizeof(wc.sta.ssid));
-    strlcpy((char *)wc.sta.password, pass ? pass : "", sizeof(wc.sta.password));
+    size_t ssid_len = ssid ? strlen(ssid) : 0;
+    size_t pass_len = pass ? strlen(pass) : 0;
+    if (!ssid_len || ssid_len > sizeof(wc.sta.ssid) || pass_len > sizeof(wc.sta.password)) {
+        ESP_LOGE(TAG, "invalid Wi-Fi credential length");
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (pass_len == sizeof(wc.sta.password)) {
+        for (size_t i = 0; i < pass_len; i++) {
+            if (!isxdigit((unsigned char)pass[i])) {
+                ESP_LOGE(TAG, "a 64-byte Wi-Fi key must be hexadecimal");
+                return ESP_ERR_INVALID_ARG;
+            }
+        }
+    }
+    // The SDK accepts full-width fields without a terminating NUL.
+    memcpy(wc.sta.ssid, ssid, ssid_len);
+    if (pass_len) memcpy(wc.sta.password, pass, pass_len);
     wc.sta.threshold.authmode = (pass && *pass) ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
     wc.sta.pmf_cfg.capable = true;
 

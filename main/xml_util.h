@@ -13,9 +13,16 @@
 // Sink for the writers: an HTTP chunk, a FILE, ...
 typedef esp_err_t (*xml_write_cb_t)(void *ctx, const char *data, size_t len);
 
+// Validates the complete supported XML document without changing any state:
+// one root, balanced tags, quoted unique attributes, entities and an optional
+// XML declaration/comments. DTDs and other unsupported constructs are rejected.
+// ESP_ERR_INVALID_ARG includes malformed/truncated documents.
+esp_err_t xml_validate_document(const char *xml);
+
 esp_err_t xml_write_text(xml_write_cb_t write, void *ctx, const char *text);
 
-// Writes `text` with &, <, >, " and ' replaced by entities.
+// Writes valid UTF-8 XML text with &, <, >, " and ' replaced by entities.
+// Invalid XML characters are rejected rather than writing an unreadable file.
 esp_err_t xml_write_escaped(xml_write_cb_t write, void *ctx, const char *text);
 
 // Writes ` name="value"`, with the value escaped.
@@ -37,3 +44,6 @@ bool xml_attr_u32(const char *element, const char *end, const char *name, uint32
 // Start of the next `<name` element at or after `from`, or NULL. Only matches
 // a complete tag name, so "<channel" does not match "<channels".
 const char *xml_find_element(const char *from, const char *name);
+
+// Closing '>' of an opening tag, ignoring any '>' inside quoted attributes.
+const char *xml_element_end(const char *element);

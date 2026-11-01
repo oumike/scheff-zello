@@ -32,10 +32,15 @@ typedef struct {
     bool ptt_latch;     // tap to start/stop talking instead of press-and-hold
 } settings_t;
 
-// Loaded at boot from NVS, falling back to Kconfig defaults.
+// Loaded at boot from a versioned NVS snapshot. During one-time migration,
+// missing legacy fields use Kconfig defaults; legacy volume/mic_gain values
+// above 100/42 are warned about and clamped. Other invalid persisted data
+// returns an error without erasing it or replacing the current settings.
 extern settings_t g_settings;
 
 esp_err_t settings_load(void);
+// Atomically persists all fields as one NVS blob, leaving the prior snapshot
+// intact if the blob write fails. Legacy individual keys are not deleted.
 esp_err_t settings_save(void);
 
 // Set a field by name from a string (used by the console and the web config).

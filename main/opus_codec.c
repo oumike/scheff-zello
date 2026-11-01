@@ -3,6 +3,8 @@
 #include <string.h>
 #include "esp_check.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "mbedtls/base64.h"
 #include "opus.h"
 #include "audio.h"
@@ -20,10 +22,13 @@ static const char *TAG = "opus";
 
 static OpusEncoder *s_enc;
 static OpusDecoder *s_dec;
+static SemaphoreHandle_t s_decoder_lock;
 static char s_header[12];
 
 esp_err_t opus_codec_init(void)
 {
+    s_decoder_lock = xSemaphoreCreateMutex();
+    ESP_RETURN_ON_FALSE(s_decoder_lock, ESP_ERR_NO_MEM, TAG, "decoder lock");
     int err;
     s_enc = opus_encoder_create(AUDIO_RATE, 1, OPUS_APPLICATION_VOIP, &err);
     ESP_RETURN_ON_FALSE(s_enc && err == OPUS_OK, ESP_FAIL, TAG, "encoder: %s", opus_strerror(err));
@@ -62,12 +67,18 @@ int opus_codec_decode(const uint8_t *packet, size_t len, int16_t *pcm, size_t ma
 {
     if (!s_dec) return -1;
     if (max_samples > DECODE_MAX_SAMPLES) max_samples = DECODE_MAX_SAMPLES;
-    return opus_decode(s_dec, packet, len, pcm, max_samples, 0);
+    xSemaphoreTake(s_decoder_lock, portMAX_DELAY);
+    int samples = opus_decode(s_dec, packet, len, pcm, max_samples, 0);
+    xSemaphoreGive(s_decoder_lock);
+    return samples;
 }
 
 void opus_codec_reset_decoder(void)
 {
-    if (s_dec) opus_decoder_ctl(s_dec, OPUS_RESET_STATE);
+    if (!s_dec) return;
+    xSemaphoreTake(s_decoder_lock, portMAX_DELAY);
+    opus_decoder_ctl(s_dec, OPUS_RESET_STATE);
+    xSemaphoreGive(s_decoder_lock);
 }
 
 const char *opus_codec_header_base64(void)

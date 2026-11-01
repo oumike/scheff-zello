@@ -270,10 +270,15 @@ static void write_coredump(FILE *f, int idx)
         if (err == ESP_OK && fwrite(buf, 1, n, out) != n) err = ESP_FAIL;
     }
     free(buf);
-    if (out) fclose(out);
+    if (out && fclose(out) != 0) err = ESP_FAIL;
     fprintf(f, "Core dump:    %s (%u bytes)%s\n", path + strlen(CRASH_DIR) + 1, (unsigned)size,
             err == ESP_OK ? "" : ", WRITE FAILED");
-    if (err == ESP_OK) esp_core_dump_image_erase();
+    if (err == ESP_OK) {
+        esp_err_t erase_err = esp_core_dump_image_erase();
+        if (erase_err != ESP_OK) ESP_LOGE(TAG, "could not erase the saved flash core dump");
+    } else {
+        ESP_LOGE(TAG, "could not save %s; retaining the flash core dump", path);
+    }
 }
 #endif
 
@@ -314,8 +319,11 @@ static bool save_crash_locked(void)
         fprintf(f, "(not kept)\n");
     }
     bool ok = !ferror(f);
-    fclose(f);
-    if (!ok) return false;
+    if (fclose(f) != 0) ok = false;
+    if (!ok) {
+        ESP_LOGE(TAG, "could not finish writing %s", path);
+        return false;
+    }
 
     free(s_prev_log);
     s_prev_log = NULL;
@@ -348,10 +356,15 @@ static void save_disconnect_locked(const char *why)
         write_zello_status(f);
         fprintf(f, "\n--- recent log ---\n");
         fwrite(log, 1, len, f);
-        fclose(f);
-        s_reports_written++;
-        strlcpy(s_last_report, path, sizeof(s_last_report));
-        ESP_LOGW(TAG, "disconnect report saved to %s", path);
+        bool ok = !ferror(f);
+        if (fclose(f) != 0) ok = false;
+        if (ok) {
+            s_reports_written++;
+            strlcpy(s_last_report, path, sizeof(s_last_report));
+            ESP_LOGW(TAG, "disconnect report saved to %s", path);
+        } else {
+            ESP_LOGE(TAG, "could not finish writing %s", path);
+        }
     } else {
         ESP_LOGE(TAG, "could not create %s", path);
     }

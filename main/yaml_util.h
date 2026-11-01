@@ -15,7 +15,8 @@
 //
 // Top-level scalars, top-level sections holding a map or a list of maps,
 // comments, "---", and plain, 'single' or "double" quoted values. Flow
-// collections other than an empty [] or {} are not supported.
+// collections other than an empty [] or {} are not supported. An empty flow
+// collection completes its section and cannot have indented children.
 
 #include <stdbool.h>
 #include <stddef.h>

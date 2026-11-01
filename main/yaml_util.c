@@ -96,6 +96,8 @@ static bool only_comment(const char *p, const char *end)
 static bool decode_value(const char *p, const char *end, char *out, size_t size)
 {
     while (p < end && *p == ' ') p++;
+    // Flow collections are handled separately, only when exactly empty.
+    if (p < end && (*p == '[' || *p == '{')) return false;
     size_t n = 0;
     if (p < end && *p == '"') {
         for (p++; p < end && *p != '"'; p++) {
@@ -182,8 +184,9 @@ static bool empty_value(const char *p, const char *end, bool *flow_empty)
     while (p < end && *p == ' ') p++;
     *flow_empty = false;
     if (end - p >= 2 && (!strncmp(p, "[]", 2) || !strncmp(p, "{}", 2))) {
-        *flow_empty = true;
         p += 2;
+        if (!only_comment(p, end)) return false;
+        *flow_empty = true;
     }
     return only_comment(p, end);
 }
@@ -232,7 +235,9 @@ esp_err_t yaml_parse(const char *text, yaml_value_cb_t cb, void *ctx, int *bad_l
             item = dash_indent = -1;
             if (empty_value(rest, end, &flow_empty)) {
                 strlcpy(section, key, sizeof(section));
-                in_section = true;
+                // Empty flow collections emit the marker, but are complete:
+                // only a block section may accept subsequent indented lines.
+                in_section = !flow_empty;
                 err = cb(ctx, section, -1, NULL, NULL);
             } else {
                 in_section = false;

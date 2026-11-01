@@ -17,9 +17,10 @@
 static const char *TAG = "audio";
 
 // 2 s of receive buffering; start playback once two Zello packets (120 ms)
-// have arrived.
+// have arrived, but do not strand a shorter transmission in the buffer.
 #define PLAY_BUF_BYTES    (2 * AUDIO_RATE * sizeof(int16_t))
 #define PLAY_START_BYTES  (2 * AUDIO_FRAME * sizeof(int16_t))
+#define PLAY_START_TIMEOUT_MS 120
 
 // Playback and capture devices. On the P4 both are the one ES8311; on the
 // T-Deck the speaker amplifier and the ES7210 mic ADC are separate parts on
@@ -355,10 +356,22 @@ static void play_task(void *arg)
     int16_t *frame = malloc(FRAME_BYTES);
     int16_t *io = AUDIO_STEREO_IO ? malloc(IO_BYTES) : NULL;
     if (!frame || (AUDIO_STEREO_IO && !io)) vTaskDelete(NULL);
+    bool waiting = false;
+    TickType_t queued_since = 0;
     for (;;) {
         size_t got = 0;
-        if (!s_playing && xStreamBufferBytesAvailable(s_play) >= PLAY_START_BYTES) {
-            s_playing = true;
+        if (!s_playing) {
+            size_t queued = xStreamBufferBytesAvailable(s_play);
+            TickType_t now = xTaskGetTickCount();
+            if (queued && !waiting) {
+                queued_since = now;
+                waiting = true;
+            }
+            if (queued >= PLAY_START_BYTES ||
+                (queued && now - queued_since >= pdMS_TO_TICKS(PLAY_START_TIMEOUT_MS))) {
+                s_playing = true;
+            }
+            if (!queued || s_playing) waiting = false;
         }
         if (s_playing) {
             got = xStreamBufferReceive(s_play, frame, FRAME_BYTES, 0);

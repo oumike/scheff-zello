@@ -1,5 +1,8 @@
 #include "channel_list.h"
+#include "file_store.h"
 
+#include <ctype.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,7 +17,16 @@ static const char *TAG = "channels";
 
 #define DATA_MOUNT "/data"
 #define DATA_LABEL "storage"
-#define TMP_PATH   DATA_MOUNT "/zello-channels.tmp"
+#define TMP_PATH CHANNEL_LIST_PATH ".tmp"
+
+static const char FILE_HEADER[] =
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<zello-channels version=\"1\">\n";
+static const char FILE_FOOTER[] = "</zello-channels>\n";
+// Every input byte can expand to six bytes (&quot; or &apos;). Include all
+// fixed syntax and the longest decimal counter so every legal saved list fits.
+#define FILE_MAX (sizeof(FILE_HEADER) - 1 + sizeof(FILE_FOOTER) - 1 + CHANNEL_LIST_MAX * \
+    (6 * (sizeof(((channel_entry_t *)0)->name) - 1 + sizeof(((channel_entry_t *)0)->desc) - 1) + \
+     sizeof("  <channel name=\"\" desc=\"\" favorite=\"false\" uses=\"4294967295\"/>\n") - 1))
 
 static channel_entry_t s_list[CHANNEL_LIST_MAX];
 static size_t s_count;
@@ -44,7 +56,7 @@ static void sort_list(void)
 static int index_of(const char *name)
 {
     for (size_t i = 0; i < s_count; i++) {
-        if (!strcasecmp(s_list[i].name, name)) return (int)i;
+        if (!strcmp(s_list[i].name, name)) return (int)i;
     }
     return -1;
 }
@@ -56,11 +68,12 @@ static esp_err_t file_write(void *ctx, const char *data, size_t len)
     return fwrite(data, 1, len, ctx) == len ? ESP_OK : ESP_FAIL;
 }
 
-esp_err_t channel_list_write(xml_write_cb_t write, void *ctx, const char *indent)
+static esp_err_t write_entries(xml_write_cb_t write, void *ctx, const char *indent,
+                               const channel_entry_t *entries, size_t count)
 {
     esp_err_t err = ESP_OK;
-    for (size_t i = 0; i < s_count && err == ESP_OK; i++) {
-        const channel_entry_t *e = &s_list[i];
+    for (size_t i = 0; i < count && err == ESP_OK; i++) {
+        const channel_entry_t *e = &entries[i];
         err = xml_write_text(write, ctx, indent);
         if (err == ESP_OK) err = xml_write_text(write, ctx, "<channel");
         if (err == ESP_OK) err = xml_write_attr(write, ctx, "name", e->name);
@@ -72,45 +85,82 @@ esp_err_t channel_list_write(xml_write_cb_t write, void *ctx, const char *indent
     return err;
 }
 
-// Writes to a temporary file and renames it over the real one, so a reset
-// halfway through a save cannot leave a half-written list behind.
-static esp_err_t save_locked(void)
+esp_err_t channel_list_write(xml_write_cb_t write, void *ctx, const char *indent)
+{
+    lock();
+    esp_err_t err = write_entries(write, ctx, indent, s_list, s_count);
+    unlock();
+    return err;
+}
+
+static esp_err_t save_locked(const channel_entry_t *entries, size_t count)
 {
     if (s_wl == WL_INVALID_HANDLE) return ESP_ERR_INVALID_STATE;
     FILE *f = fopen(TMP_PATH, "w");
     if (!f) return ESP_FAIL;
-    esp_err_t err = xml_write_text(file_write, f,
-                                   "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-                                   "<zello-channels version=\"1\">\n");
-    if (err == ESP_OK) err = channel_list_write(file_write, f, "  ");
-    if (err == ESP_OK) err = xml_write_text(file_write, f, "</zello-channels>\n");
+    esp_err_t err = xml_write_text(file_write, f, FILE_HEADER);
+    if (err == ESP_OK) err = write_entries(file_write, f, "  ", entries, count);
+    if (err == ESP_OK) err = xml_write_text(file_write, f, FILE_FOOTER);
+    if (fflush(f) != 0) err = ESP_FAIL;
     if (fclose(f) != 0) err = ESP_FAIL;
     if (err != ESP_OK) {
         remove(TMP_PATH);
         return err;
     }
-    remove(CHANNEL_LIST_PATH);
-    return rename(TMP_PATH, CHANNEL_LIST_PATH) == 0 ? ESP_OK : ESP_FAIL;
+    return file_store_commit(CHANNEL_LIST_PATH);
 }
 
-// Fills the list from `xml`. Returns the number of entries parsed.
-static size_t parse_locked(const char *xml)
+static bool valid_entry(const channel_entry_t *entry)
 {
-    s_count = 0;
-    for (const char *p = xml_find_element(xml, "channel"); p && s_count < CHANNEL_LIST_MAX;
+    return entry && entry->name[0] && memchr(entry->name, 0, sizeof(entry->name)) &&
+           memchr(entry->desc, 0, sizeof(entry->desc));
+}
+
+static esp_err_t append_entry(channel_entry_t *entries, size_t *count, const channel_entry_t *entry)
+{
+    if (!valid_entry(entry)) return ESP_ERR_INVALID_ARG;
+    for (size_t i = 0; i < *count; i++)
+        if (!strcmp(entries[i].name, entry->name)) return ESP_OK;
+    if (*count == CHANNEL_LIST_MAX) return ESP_ERR_INVALID_ARG;
+    entries[(*count)++] = *entry;
+    return ESP_OK;
+}
+
+static esp_err_t parse_entries(const char *xml, channel_entry_t *entries, size_t *count)
+{
+    *count = 0;
+    esp_err_t err = xml_validate_document(xml);
+    if (err != ESP_OK) return err;
+    for (const char *p = xml_find_element(xml, "channel"); p;
          p = xml_find_element(p + 1, "channel")) {
-        const char *end = strchr(p, '>');
-        if (!end) break;
+        const char *end = xml_element_end(p);
+        if (!end) return ESP_ERR_INVALID_ARG;
+        if (end[-1] != '/') {
+            const char *body = end + 1;
+            for (;;) {
+                while (isspace((unsigned char)*body)) body++;
+                if (strncmp(body, "<!--", 4)) break;
+                body = strstr(body + 4, "-->") + 3;  // already validated
+            }
+            if (strncmp(body, "</channel", 9) ||
+                (!isspace((unsigned char)body[9]) && body[9] != '>')) return ESP_ERR_INVALID_ARG;
+        }
         channel_entry_t e = {0};
-        if (xml_attr(p, end, "name", e.name, sizeof(e.name)) != 1 || !e.name[0]) continue;
-        xml_attr(p, end, "desc", e.desc, sizeof(e.desc));
-        xml_attr_bool(p, end, "favorite", &e.favorite);
-        xml_attr_u32(p, end, "uses", UINT32_MAX, &e.uses);
-        if (index_of(e.name) >= 0) continue;  // keep the first of a duplicated name
-        s_list[s_count++] = e;
+        if (xml_attr(p, end, "name", e.name, sizeof(e.name)) != 1 ||
+            xml_attr(p, end, "desc", e.desc, sizeof(e.desc)) < 0) return ESP_ERR_INVALID_ARG;
+        char text[12];
+        int present = xml_attr(p, end, "favorite", text, sizeof(text));
+        if (present < 0 || (present && !xml_attr_bool(p, end, "favorite", &e.favorite))) {
+            return ESP_ERR_INVALID_ARG;
+        }
+        present = xml_attr(p, end, "uses", text, sizeof(text));
+        if (present < 0 || (present && !xml_attr_u32(p, end, "uses", UINT32_MAX, &e.uses))) {
+            return ESP_ERR_INVALID_ARG;
+        }
+        err = append_entry(entries, count, &e);
+        if (err != ESP_OK) return err;
     }
-    sort_list();
-    return s_count;
+    return ESP_OK;
 }
 
 static void notify(void)
@@ -121,6 +171,7 @@ static void notify(void)
 esp_err_t channel_list_init(void)
 {
     if (!s_lock) s_lock = xSemaphoreCreateMutex();
+    if (!s_lock) return ESP_ERR_NO_MEM;
 
     esp_vfs_fat_mount_config_t cfg = {
         .format_if_mount_failed = true,
@@ -133,20 +184,23 @@ esp_err_t channel_list_init(void)
         return err;
     }
 
+    err = file_store_recover(CHANNEL_LIST_PATH);
+    if (err != ESP_OK) return err;
     FILE *f = fopen(CHANNEL_LIST_PATH, "r");
     if (!f) {
+        if (errno != ENOENT) return ESP_FAIL;
         ESP_LOGI(TAG, "no channel list yet");
         return ESP_OK;
     }
-    fseek(f, 0, SEEK_END);
-    long size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    // A full list of 128 channels is well under 32 KB; anything larger is not
-    // a list we wrote.
-    if (size <= 0 || size > 64 * 1024) {
+    if (fseek(f, 0, SEEK_END) != 0) {
         fclose(f);
-        ESP_LOGW(TAG, "ignoring a %ld byte channel list", size);
-        return ESP_OK;
+        return ESP_FAIL;
+    }
+    long size = ftell(f);
+    if (size <= 0 || (size_t)size > FILE_MAX || fseek(f, 0, SEEK_SET) != 0) {
+        fclose(f);
+        ESP_LOGW(TAG, "invalid %ld byte channel list", size);
+        return ESP_ERR_INVALID_ARG;
     }
     char *xml = malloc(size + 1);
     if (!xml) {
@@ -154,16 +208,32 @@ esp_err_t channel_list_init(void)
         return ESP_ERR_NO_MEM;
     }
     size_t got = fread(xml, 1, size, f);
-    bool ok = !ferror(f);
-    fclose(f);
-    xml[ok ? got : 0] = 0;
+    bool ok = got == (size_t)size && !ferror(f);
+    if (fclose(f) != 0) ok = false;
+    if (!ok || memchr(xml, 0, got)) {
+        free(xml);
+        return ok ? ESP_ERR_INVALID_ARG : ESP_FAIL;
+    }
+    xml[got] = 0;
 
-    lock();
-    size_t n = parse_locked(xml);
-    unlock();
+    channel_entry_t *entries = malloc(sizeof(s_list));
+    if (!entries) {
+        free(xml);
+        return ESP_ERR_NO_MEM;
+    }
+    size_t n;
+    err = parse_entries(xml, entries, &n);
+    if (err == ESP_OK) {
+        lock();
+        memcpy(s_list, entries, n * sizeof(*entries));
+        s_count = n;
+        sort_list();
+        unlock();
+        ESP_LOGI(TAG, "loaded %u channels", (unsigned)n);
+    }
+    free(entries);
     free(xml);
-    ESP_LOGI(TAG, "loaded %u channels", (unsigned)n);
-    return ESP_OK;
+    return err;
 }
 
 // ---- reads -----------------------------------------------------------------
@@ -218,20 +288,20 @@ bool channel_list_find(const char *name, channel_entry_t *out)
 
 esp_err_t channel_list_put(const char *orig_name, const channel_entry_t *entry)
 {
-    if (!entry->name[0]) return ESP_ERR_INVALID_ARG;
+    if (!valid_entry(entry)) return ESP_ERR_INVALID_ARG;
     lock();
     int at = orig_name && orig_name[0] ? index_of(orig_name) : -1;
-    // A rename onto an existing name replaces that entry rather than making a
-    // second one with the same name.
     int clash = index_of(entry->name);
     if (clash >= 0 && clash != at) {
-        if (at >= 0) {
-            s_list[at] = s_list[s_count - 1];
-            s_count--;
-            if (clash == (int)s_count) clash = at;
+        if (orig_name && orig_name[0]) {
+            unlock();
+            return ESP_ERR_INVALID_ARG;
         }
         at = clash;
     }
+    size_t old_count = s_count;
+    channel_entry_t previous = {0};
+    if (at >= 0) previous = s_list[at];
     if (at < 0) {
         if (s_count >= CHANNEL_LIST_MAX) {
             unlock();
@@ -240,8 +310,12 @@ esp_err_t channel_list_put(const char *orig_name, const channel_entry_t *entry)
         at = (int)s_count++;
     }
     s_list[at] = *entry;
+    esp_err_t err = save_locked(s_list, s_count);
+    if (err != ESP_OK) {
+        s_list[at] = previous;
+        s_count = old_count;
+    }
     sort_list();
-    esp_err_t err = save_locked();
     unlock();
     if (err == ESP_OK) notify();
     return err;
@@ -255,9 +329,14 @@ esp_err_t channel_list_delete(const char *name)
         unlock();
         return ESP_ERR_NOT_FOUND;
     }
+    channel_entry_t previous = s_list[at];
     s_list[at] = s_list[--s_count];
+    esp_err_t err = save_locked(s_list, s_count);
+    if (err != ESP_OK) {
+        s_list[s_count++] = s_list[at];
+        s_list[at] = previous;
+    }
     sort_list();
-    esp_err_t err = save_locked();
     unlock();
     if (err == ESP_OK) notify();
     return err;
@@ -271,9 +350,11 @@ esp_err_t channel_list_set_favorite(const char *name, bool favorite)
         unlock();
         return ESP_ERR_NOT_FOUND;
     }
+    bool previous = s_list[at].favorite;
     s_list[at].favorite = favorite;
+    esp_err_t err = save_locked(s_list, s_count);
+    if (err != ESP_OK) s_list[at].favorite = previous;
     sort_list();
-    esp_err_t err = save_locked();
     unlock();
     if (err == ESP_OK) notify();
     return err;
@@ -281,9 +362,10 @@ esp_err_t channel_list_set_favorite(const char *name, bool favorite)
 
 void channel_list_record_join(const char *name)
 {
-    if (!name || !name[0]) return;
+    if (!name || !name[0] || strlen(name) >= sizeof(s_list[0].name)) return;
     lock();
     int at = index_of(name);
+    size_t old_count = s_count;
     if (at < 0) {
         if (s_count >= CHANNEL_LIST_MAX) {
             unlock();
@@ -293,58 +375,68 @@ void channel_list_record_join(const char *name)
         s_list[at] = (channel_entry_t){0};
         strlcpy(s_list[at].name, name, sizeof(s_list[at].name));
     }
+    uint32_t previous = s_list[at].uses;
     s_list[at].uses++;
+    esp_err_t err = save_locked(s_list, s_count);
+    if (err != ESP_OK) {
+        s_list[at].uses = previous;
+        s_count = old_count;
+    }
     sort_list();
-    esp_err_t err = save_locked();
     unlock();
     if (err != ESP_OK) ESP_LOGW(TAG, "could not record the join of \"%s\": %s", name, esp_err_to_name(err));
-    notify();
+    else notify();
 }
 
 esp_err_t channel_list_import_buffer(const char *xml, size_t *count)
 {
-    channel_entry_t *saved = malloc(sizeof(s_list));
-    if (!saved) return ESP_ERR_NO_MEM;
+    if (count) *count = 0;
+    channel_entry_t *entries = malloc(sizeof(s_list));
+    if (!entries) return ESP_ERR_NO_MEM;
 
-    lock();
-    memcpy(saved, s_list, sizeof(s_list));
-    size_t saved_count = s_count;
-    size_t n = parse_locked(xml);
-    esp_err_t err = n ? save_locked() : ESP_ERR_NOT_FOUND;
-    if (err != ESP_OK) {  // leave the list as it was
-        memcpy(s_list, saved, sizeof(s_list));
-        s_count = saved_count;
+    size_t n;
+    esp_err_t err = parse_entries(xml, entries, &n);
+    if (err == ESP_OK && !n) err = ESP_ERR_NOT_FOUND;
+    if (err == ESP_OK) {
+        qsort(entries, n, sizeof(*entries), compare);
+        lock();
+        err = save_locked(entries, n);
+        if (err == ESP_OK) {
+            memcpy(s_list, entries, n * sizeof(*entries));
+            s_count = n;
+        }
+        unlock();
     }
-    unlock();
-    free(saved);
-    if (count) *count = n;
+    free(entries);
+    if (err == ESP_OK && count) *count = n;
     if (err == ESP_OK) notify();
     return err;
 }
 
 esp_err_t channel_list_replace(const channel_entry_t *entries, size_t n, size_t *count)
 {
-    channel_entry_t *saved = malloc(sizeof(s_list));
-    if (!saved) return ESP_ERR_NO_MEM;
+    if (count) *count = 0;
+    if (!n) return ESP_ERR_NOT_FOUND;
+    if (!entries) return ESP_ERR_INVALID_ARG;
+    channel_entry_t *replacement = malloc(sizeof(s_list));
+    if (!replacement) return ESP_ERR_NO_MEM;
 
-    lock();
-    memcpy(saved, s_list, sizeof(s_list));
-    size_t saved_count = s_count;
-    s_count = 0;
-    for (size_t i = 0; i < n && s_count < CHANNEL_LIST_MAX; i++) {
-        if (!entries[i].name[0] || index_of(entries[i].name) >= 0) continue;  // keep the first of a name
-        s_list[s_count++] = entries[i];
+    size_t added = 0;
+    esp_err_t err = ESP_OK;
+    for (size_t i = 0; i < n && err == ESP_OK; i++)
+        err = append_entry(replacement, &added, &entries[i]);
+    if (err == ESP_OK) {
+        qsort(replacement, added, sizeof(*replacement), compare);
+        lock();
+        err = save_locked(replacement, added);
+        if (err == ESP_OK) {
+            memcpy(s_list, replacement, added * sizeof(*replacement));
+            s_count = added;
+        }
+        unlock();
     }
-    sort_list();
-    size_t added = s_count;
-    esp_err_t err = added ? save_locked() : ESP_ERR_NOT_FOUND;
-    if (err != ESP_OK) {  // leave the list as it was
-        memcpy(s_list, saved, sizeof(s_list));
-        s_count = saved_count;
-    }
-    unlock();
-    free(saved);
-    if (count) *count = added;
+    free(replacement);
+    if (err == ESP_OK && count) *count = added;
     if (err == ESP_OK) notify();
     return err;
 }

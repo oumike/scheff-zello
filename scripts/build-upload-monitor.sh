@@ -10,9 +10,6 @@ ENV_NAME="tdisplay-p4"
 # espressif32 resolution cannot replace it.
 DEFAULT_PIO_CORE_DIR="${PLATFORMIO_CORE_DIR:-$HOME/.platformio}"
 PIO_CORE_DIR="${ZELLO_PIO_CORE_DIR:-${ZELLO_P4_PIO_CORE_DIR:-${DEFAULT_PIO_CORE_DIR}-p4}}"
-# ESP-IDF refuses a build directory whose path contains a space, and this
-# project sits under "/Volumes/T7 Shield/...", so build outside it.
-BUILD_DIR="${ZELLO_BUILD_DIR:-$PIO_CORE_DIR/build/scheff-zello}"
 PORT=""
 ERASE_FIRST=false
 FULLCLEAN=false
@@ -147,6 +144,20 @@ done
 
 if [ "$JUST_BUILD" = true ] && [ "$ERASE_FIRST" = true ]; then
 	echo "--erase needs a connected device; it cannot be combined with --just-build."
+	exit 1
+fi
+
+# Check physical paths: a space-free symlink can still lead to an IDF path
+# containing spaces. Keep the existing default where it works.
+PIO_CORE_DIR="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$PIO_CORE_DIR")"
+if [[ "$PIO_CORE_DIR" == *" "* ]] && [ -z "${ZELLO_PIO_CORE_DIR:-${ZELLO_P4_PIO_CORE_DIR:-}}" ]; then
+	PIO_CORE_DIR="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$HOME/.cache/scheff-zello/platformio")"
+	echo "[PIO] The default core resolves to a path with spaces; using $PIO_CORE_DIR instead."
+fi
+BUILD_DIR="${ZELLO_BUILD_DIR:-$PIO_CORE_DIR/build/scheff-zello}"
+BUILD_DIR="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$BUILD_DIR")"
+if [[ "$PIO_CORE_DIR" == *" "* || "$BUILD_DIR" == *" "* ]]; then
+	echo "ESP-IDF needs space-free physical paths. Set ZELLO_PIO_CORE_DIR and ZELLO_BUILD_DIR accordingly." >&2
 	exit 1
 fi
 

@@ -168,10 +168,11 @@ button:disabled{opacity:.5;cursor:default}
 </main>
 <script>
 const $=id=>document.getElementById(id);
-let joining=false,filled=false,audioFilled=false;
+let joining=false,filled=false,audioFilled=false,saving=false,wifiEdited=false;
 // Unsaved edits per group: Save sends only those, so a volume change does not
 // make the device sign in to Zello again.
 const dirty={account:false,audio:false,channel:false};
+const revision={account:0,audio:0,channel:0};
 function restored(j,where){
   const parts=[];
   if(j.settings)parts.push('all settings');
@@ -183,6 +184,10 @@ function restored(j,where){
 function msg(el,cls,text){el.className='msg show '+cls;el.textContent=text}
 function row(k,v){return '<div class="row"><span>'+k+'</span><span>'+v+'</span></div>'}
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function textError(value,max,label){
+  if(value.includes('\0'))return label+' cannot contain a NUL character.';
+  return new TextEncoder().encode(value).length>max?label+' must fit in '+max+' UTF-8 bytes.':'';
+}
 async function api(path,body){
   const r=await fetch(path,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});
   const j=await r.json().catch(()=>({}));
@@ -197,6 +202,7 @@ function showNetworkFields(){
 }
 $('network').onchange=showNetworkFields;
 async function refresh(){
+  const observed={...revision};
   let s;
   try{s=await api('/api/status')}catch(e){$('status').textContent='Device not reachable - it may be switching networks. Retrying…';return}
   const w=s.wifi,a=s.account,z=s.zello;
@@ -211,15 +217,15 @@ async function refresh(){
   $('s-wifi').classList.toggle('done',!!w.ssid);
   $('s-acct').classList.toggle('done',!!(a.username&&a.has_password&&(a.network==='work'?a.work_network:a.has_token)));
   $('s-chan').classList.toggle('done',!!z.channel);
-  if(!filled&&!dirty.account){
+  if(!filled&&!dirty.account&&observed.account===revision.account){
     filled=true;
-    if(w.ssid)$('ssid').value=w.ssid;
+    if(w.ssid&&!wifiEdited)$('ssid').value=w.ssid;
     $('network').value=a.network;$('user').value=a.username||'';$('wnet').value=a.work_network||'';
     if(a.has_password)$('apass').placeholder='(saved - leave blank to keep)';
     if(a.has_token)$('token').placeholder='(saved - leave blank to keep)';
     showNetworkFields();
   }
-  if(!audioFilled&&!dirty.audio){
+  if(!audioFilled&&!dirty.audio&&observed.audio===revision.audio){
     audioFilled=true;
     $('vol').value=s.audio.volume;$('volv').textContent=s.audio.volume+'%';
     $('gain').value=s.audio.mic_gain;$('gainv').textContent=s.audio.mic_gain+' dB';
@@ -247,57 +253,79 @@ $('scan').onclick=async()=>{
   }catch(e){alert('Scan failed: '+e.message)}
   b.disabled=false;b.textContent='Scan again';
 };
-$('nets').onchange=e=>{if(e.target.value){$('ssid').value=e.target.value;$('wpass').value='';$('wpass').focus()}};
+$('ssid').addEventListener('input',()=>{wifiEdited=true});
+$('nets').onchange=e=>{if(e.target.value){wifiEdited=true;$('ssid').value=e.target.value;$('wpass').value='';$('wpass').focus()}};
 $('join').onclick=async()=>{
-  const ssid=$('ssid').value.trim();
+  const ssid=$('ssid').value;
   if(!ssid){msg($('wmsg'),'err','Enter a network name first, or scan.');return}
+  const error=textError(ssid,32,'The network name')||textError($('wpass').value,64,'The Wi-Fi password');
+  if(error){msg($('wmsg'),'err',error);return}
   try{await api('/api/wifi',{ssid,pass:$('wpass').value});joining=true;msg($('wmsg'),'busy','Connecting to '+ssid+'…')}
   catch(e){msg($('wmsg'),'err',e.message)}
 };
 // ---- save ----
 function saveButton(){
   const any=dirty.account||dirty.audio||dirty.channel,b=$('save');
-  b.disabled=!any;b.textContent=any?'Save settings':'No unsaved changes';
+  b.disabled=saving||!any;b.textContent=saving?'Saving…':any?'Save settings':'No unsaved changes';
+  $('up').disabled=$('sdi').disabled=saving;
 }
-function markDirty(group){dirty[group]=true;$('smsg').className='msg';saveButton()}
-function markClean(){dirty.account=dirty.audio=dirty.channel=false;saveButton()}
+function markDirty(group){revision[group]++;dirty[group]=true;$('smsg').className='msg';saveButton()}
+function acknowledge(group,submitted){
+  if(revision[group]!==submitted)return false;
+  dirty[group]=false;revision[group]++;
+  return true;
+}
 ['network','user','apass','token','wnet'].forEach(id=>{$(id).addEventListener('input',()=>markDirty('account'));
   $(id).addEventListener('change',()=>markDirty('account'))});
 $('save').onclick=async()=>{
-  const b=$('save');
-  const cname=$('f-name').value.trim();
+  if(saving)return;
+  const cname=$('f-name').value;
   if(dirty.channel&&!cname){msg($('smsg'),'err','Give the channel a name, or close it.');$('f-name').focus();return}
-  b.disabled=true;b.textContent='Saving…';
+  const error=dirty.channel&&(textError(cname,64,'The channel name')||textError($('f-desc').value,63,'The note'));
+  if(error){msg($('smsg'),'err',error);return}
+  const submitted={...revision},session=formSession,isNew=!editing,query=$('q').value;
+  const pending={
+    audio:dirty.audio?{volume:+$('vol').value,mic_gain:+$('gain').value,ptt_latch:$('latch').checked}:null,
+    account:dirty.account?{network:$('network').value,username:$('user').value.trim(),password:$('apass').value,
+      auth_token:$('token').value.trim(),work_network:$('wnet').value.trim()}:null,
+    channel:dirty.channel?{orig_name:editing?editing.name:'',name:cname,desc:$('f-desc').value.trim()}:null
+  };
+  saving=true;saveButton();
   const done=[];
   try{
-    if(dirty.audio){
-      await api('/api/audio',{volume:+$('vol').value,mic_gain:+$('gain').value,ptt_latch:$('latch').checked});
-      dirty.audio=false;done.push('Audio saved.');
+    if(pending.audio){
+      await api('/api/audio',pending.audio);
+      acknowledge('audio',submitted.audio);done.push('Audio saved.');
     }
-    if(dirty.account){
-      await api('/api/account',{network:$('network').value,username:$('user').value.trim(),password:$('apass').value,
-        auth_token:$('token').value.trim(),work_network:$('wnet').value.trim()});
-      dirty.account=false;done.push('Account saved; the device is signing in to Zello.');
-      $('apass').value='';$('token').value='';filled=false;
+    if(pending.account){
+      await api('/api/account',pending.account);
+      done.push('Account saved; the device is signing in to Zello.');
+      if(acknowledge('account',submitted.account)){$('apass').value='';$('token').value='';filled=false}
     }
-    if(dirty.channel){
-      const isNew=!editing;
-      await api('/api/channels',{orig_name:editing?editing.name:'',name:cname,desc:$('f-desc').value.trim()});
+    if(pending.channel){
+      await api('/api/channels',pending.channel);
+      if(session===formSession){
+        // A later edit must rename the identity just acknowledged, not the old one.
+        editing={...editing,name:cname,desc:pending.channel.desc};
+        $('f-del').style.display='block';$('cftitle').textContent='Edit channel';$('add').textContent='Add a channel';
+        if(acknowledge('channel',submitted.channel)){
+          closeForm();if($('q').value===query)$('q').value='';
+        }
+      }
+      done.push((isNew?'Added channel ':'Saved channel ')+cname+'.');
+      loadChannels();
       // Adding one by hand means you want to be in it.
-      if(isNew)await api('/api/channels/join',{name:cname});
-      dirty.channel=false;done.push((isNew?'Added and joining ':'Saved channel ')+cname+'.');
-      closeForm();$('q').value='';loadChannels();
+      if(isNew){await api('/api/channels/join',{name:cname});done.push('Joining '+cname+'…')}
     }
-    markClean();msg($('smsg'),'ok',done.join(' '));refresh();
+    msg($('smsg'),'ok',done.join(' '));refresh();
   }catch(e){
     // Whatever did save is no longer dirty; the rest stays for another try.
     msg($('smsg'),'err',(done.length?done.join(' ')+' ':'')+e.message);
-    b.disabled=false;b.textContent='Save settings';
-  }
+  }finally{saving=false;saveButton()}
 };
 // ---- channels ----
 // The channel form is open for `editing` (null: a new channel) while formOpen.
-let channels=[],editing=null,formOpen=false;
+let channels=[],editing=null,formOpen=false,formSession=0;
 function renderChannels(){
   const q=$('q').value.trim();
   $('clist').innerHTML=channels.length?channels.map((c,i)=>
@@ -319,6 +347,7 @@ async function loadChannels(){
   renderChannels();
 }
 function openForm(c){
+  formSession++;revision.channel++;
   editing=c;formOpen=true;$('cform').style.display='block';$('cftitle').textContent=c?'Edit channel':'New channel';
   $('f-name').value=c?c.name:'';$('f-desc').value=c?c.desc:'';
   $('f-del').style.display=c?'block':'none';$('cmsg').className='msg';$('f-name').focus();
@@ -327,6 +356,7 @@ function openForm(c){
 }
 // Closing drops whatever the form held.
 function closeForm(){
+  formSession++;revision.channel++;
   editing=null;formOpen=false;$('cform').style.display='none';
   dirty.channel=false;saveButton();$('add').textContent='Add a channel';renderChannels();
 }
@@ -368,18 +398,30 @@ $('vol').oninput=()=>{$('volv').textContent=$('vol').value+'%';markDirty('audio'
 $('gain').oninput=()=>{$('gainv').textContent=$('gain').value+' dB';markDirty('audio')};
 $('latch').onchange=()=>markDirty('audio');
 // ---- backup ----
+function applyImport(j,submitted){
+  if(j.settings){
+    if(acknowledge('account',submitted.account)){
+      filled=false;$('apass').value='';$('token').value='';
+    }
+    if(acknowledge('audio',submitted.audio))audioFilled=false;
+  }
+  if(j.channels&&acknowledge('channel',submitted.channel))closeForm();
+  refresh();loadChannels();
+}
 $('dl').onclick=()=>{location.href='/api/export'};
 $('up').onclick=()=>$('upfile').click();
 $('upfile').onchange=async e=>{
   const f=e.target.files[0];e.target.value='';
-  if(!f||!confirm('Restore settings and replace the channel list from '+f.name+'?'))return;
+  if(saving||!f||!confirm('Restore settings and replace the channel list from '+f.name+'?'))return;
+  const submitted={...revision};saving=true;saveButton();
   msg($('bmsg'),'busy','Importing '+f.name+'…');
   try{const r=await fetch('/api/import',{method:'POST',headers:{'Content-Type':'application/yaml'},body:await f.text()});
     const j=await r.json();if(!r.ok)throw new Error(j.error||'Import failed');
     const done=restored(j);
     msg($('bmsg'),'ok',done+(j.reconnecting?' The device is reconnecting to the restored Wi-Fi network.':''));
-    markClean();filled=false;audioFilled=false;refresh();loadChannels()}
+    applyImport(j,submitted)}
   catch(e){msg($('bmsg'),'err',e.message)}
+  finally{saving=false;saveButton()}
 };
 $('sdx').onclick=async()=>{
   msg($('bmsg'),'busy','Writing to the SD card…');
@@ -387,13 +429,15 @@ $('sdx').onclick=async()=>{
   catch(e){msg($('bmsg'),'err',e.message)}
 };
 $('sdi').onclick=async()=>{
-  if(!confirm('Restore settings and replace the channel list from the SD card backup?'))return;
+  if(saving||!confirm('Restore settings and replace the channel list from the SD card backup?'))return;
+  const submitted={...revision};saving=true;saveButton();
   msg($('bmsg'),'busy','Reading the SD card…');
   try{const j=await api('/api/sd/import',{});
     const done=restored(j,' from the SD card');
     msg($('bmsg'),'ok',done+(j.reconnecting?' The device is reconnecting to the restored Wi-Fi network.':''));
-    markClean();filled=false;audioFilled=false;refresh();loadChannels()}
+    applyImport(j,submitted)}
   catch(e){msg($('bmsg'),'err',e.message)}
+  finally{saving=false;saveButton()}
 };
 // ---- crash reports ----
 async function loadCrash(){

@@ -55,6 +55,10 @@ zello_state_t zello_state(void);
 esp_err_t zello_connect(void);
 void zello_disconnect(void);
 
+// Boot login after Wi-Fi is ready. Does nothing if a manual connection action
+// has already superseded it, or automatic login has since been disabled.
+esp_err_t zello_auto_connect(void);
+
 // Applies an account or network change: reconnects if the account is complete,
 // otherwise just goes offline.
 void zello_reconfigure(void);

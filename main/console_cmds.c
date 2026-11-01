@@ -122,7 +122,7 @@ static int cmd_channels(int argc, char **argv)
     size_t n = channel_list_get(argc >= 2 ? argv[1] : NULL, false, list, CHANNEL_LIST_MAX);
     for (size_t i = 0; i < n; i++) {
         printf("  %c%c %-40s %s\n", list[i].favorite ? '*' : ' ',
-               !strcasecmp(list[i].name, g_settings.channel) ? '>' : ' ', list[i].name, list[i].desc);
+               !strcmp(list[i].name, g_settings.channel) ? '>' : ' ', list[i].name, list[i].desc);
     }
     printf("%u channel%s\n", (unsigned)n, n == 1 ? "" : "s");
     free(list);

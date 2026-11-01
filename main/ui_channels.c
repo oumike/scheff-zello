@@ -87,7 +87,7 @@ static void form_save(lv_event_t *e)
         ui_modal_message("Couldn't save the channel list.", UI_COLOR_STOP, true, NULL);
         return;
     }
-    bool renamed_current = s_form_orig[0] && !strcasecmp(s_form_orig, g_settings.channel);
+    bool renamed_current = s_form_orig[0] && !strcmp(s_form_orig, g_settings.channel);
     close_form();
     refresh_list();
     // Adding a channel by hand means you want to be in it; so does renaming
@@ -190,7 +190,7 @@ static void refresh_list(void)
 
     for (size_t i = 0; i < s_entry_count; i++) {
         const channel_entry_t *en = &s_entries[i];
-        bool current = !strcasecmp(en->name, g_settings.channel);
+        bool current = !strcmp(en->name, g_settings.channel);
 
         lv_obj_t *b = lv_button_create(s_list);
         lv_obj_set_size(b, LV_PCT(100), LV_SIZE_CONTENT);

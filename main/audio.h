@@ -18,7 +18,8 @@ typedef void (*audio_mic_cb_t)(const int16_t *pcm, size_t samples);
 esp_err_t audio_init(audio_mic_cb_t mic_cb);
 
 // Queue decoded received audio for playback. Playback starts once a couple of
-// packets are buffered (jitter cushion) and stops when the buffer drains.
+// packets are buffered (jitter cushion), or after a bounded prebuffer wait for
+// shorter transmissions, and stops when the buffer drains.
 void audio_play_push(const int16_t *pcm, size_t samples);
 void audio_play_flush(void);
 bool audio_is_playing(void);

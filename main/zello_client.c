@@ -92,6 +92,7 @@ static int64_t s_last_rx_us;
 static volatile bool s_ptt_wanted;
 static volatile bool s_want_connect;
 static volatile bool s_stop_requested;  // auth failure: the worker closes the socket
+static bool s_auto_connect_allowed = true;  // guarded by s_conn_lock
 
 static char s_log[LOG_LINES][LOG_LINE_MAX];
 static size_t s_log_count;  // total lines ever added; the ring holds the last LOG_LINES
@@ -100,6 +101,7 @@ static size_t s_log_count;  // total lines ever added; the ring holds the last L
 static uint8_t *s_asm;
 static size_t s_asm_len;
 static int s_asm_op;
+static bool s_asm_dropping;
 
 static void lock(void) { xSemaphoreTake(s_lock, portMAX_DELAY); }
 static void unlock(void) { xSemaphoreGive(s_lock); }
@@ -661,6 +663,13 @@ static void on_ws_event(void *arg, esp_event_base_t base, int32_t id, void *even
 {
     esp_websocket_event_data_t *d = event_data;
 
+    if (id == WEBSOCKET_EVENT_CONNECTED || id == WEBSOCKET_EVENT_DISCONNECTED ||
+        id == WEBSOCKET_EVENT_CLOSED || id == WEBSOCKET_EVENT_ERROR) {
+        s_asm_len = 0;
+        s_asm_op = 0;
+        s_asm_dropping = false;
+    }
+
     switch (id) {
     case WEBSOCKET_EVENT_CONNECTED:
         log_add("Connected to Zello.");
@@ -708,30 +717,42 @@ static void on_ws_event(void *arg, esp_event_base_t base, int32_t id, void *even
         }
         if (op == 0x08 || op == 0x09 || op == 0x0a) break;  // close, ping, pong
 
-        const uint8_t *msg = (const uint8_t *)d->data_ptr;
-        size_t len = d->data_len;
-        if (d->payload_offset != 0 || (size_t)d->payload_len != len) {
-            // A fragmented message: continuation frames carry op code 0, so
-            // the first fragment's op code is the one that matters.
-            if (d->payload_offset == 0) {
-                s_asm_len = 0;
-                s_asm_op = op;
-            }
-            if (s_asm_len + d->data_len <= MESSAGE_MAX) {
+        if (op != 0x00 && op != 0x01 && op != 0x02) break;
+        if (d->data_len < 0 || d->payload_offset < 0 || d->payload_len < d->payload_offset ||
+            d->data_len > d->payload_len - d->payload_offset || (d->data_len && !d->data_ptr)) {
+            ESP_LOGW(TAG, "invalid WebSocket frame length");
+            s_asm_len = 0;
+            s_asm_op = 0;
+            s_asm_dropping = false;
+            break;
+        }
+        if (d->payload_offset == 0 && op != 0x00) {
+            if (s_asm_op) ESP_LOGW(TAG, "discarding an unfinished WebSocket message");
+            s_asm_len = 0;
+            s_asm_op = op;
+            s_asm_dropping = false;
+        } else if (!s_asm_op) {
+            ESP_LOGW(TAG, "discarding a WebSocket continuation without a message");
+            break;
+        }
+        if (!s_asm_dropping) {
+            if ((size_t)d->data_len > MESSAGE_MAX - s_asm_len) {
+                ESP_LOGW(TAG, "dropping an oversized WebSocket message");
+                s_asm_dropping = true;
+            } else if (d->data_len) {
                 memcpy(s_asm + s_asm_len, d->data_ptr, d->data_len);
                 s_asm_len += d->data_len;
-            } else {
-                ESP_LOGW(TAG, "dropping an oversized message (%d bytes)", d->payload_len);
-                s_asm_len = MESSAGE_MAX + 1;
             }
-            if (s_asm_len < (size_t)d->payload_len) break;  // more fragments to come
-            if (s_asm_len > MESSAGE_MAX) break;
-            msg = s_asm;
-            len = s_asm_len;
-            op = s_asm_op;
         }
-        if (op == 0x01) handle_text((const char *)msg, len);
-        else if (op == 0x02) handle_binary(msg, len);
+        // payload_offset/len describe one frame; FIN ends the whole message.
+        if (!d->fin || d->data_len != d->payload_len - d->payload_offset) break;
+        if (!s_asm_dropping) {
+            if (s_asm_op == 0x01) handle_text((const char *)s_asm, s_asm_len);
+            else if (s_asm_op == 0x02) handle_binary(s_asm, s_asm_len);
+        }
+        s_asm_len = 0;
+        s_asm_op = 0;
+        s_asm_dropping = false;
         break;
     }
 
@@ -824,15 +845,23 @@ static void disconnect_locked(void)
 void zello_disconnect(void)
 {
     xSemaphoreTake(s_conn_lock, portMAX_DELAY);
+    s_auto_connect_allowed = false;
     disconnect_locked();
     xSemaphoreGive(s_conn_lock);
     set_state(ZELLO_OFFLINE, NULL);
 }
 
-esp_err_t zello_connect(void)
+static esp_err_t connect_session(bool automatic)
 {
+    xSemaphoreTake(s_conn_lock, portMAX_DELAY);
+    if (automatic && (!s_auto_connect_allowed || !g_settings.auto_connect)) {
+        xSemaphoreGive(s_conn_lock);
+        return ESP_OK;
+    }
+    s_auto_connect_allowed = false;
     const char *why = NULL;
     if (!account_ready(&why)) {
+        xSemaphoreGive(s_conn_lock);
         set_state(ZELLO_OFFLINE, why);
         return ESP_ERR_INVALID_ARG;
     }
@@ -858,7 +887,6 @@ esp_err_t zello_connect(void)
 
     // One lock across both halves: two reconnects racing here would otherwise
     // each tear down the other's client.
-    xSemaphoreTake(s_conn_lock, portMAX_DELAY);
     disconnect_locked();
     s_ws = esp_websocket_client_init(&cfg);
     esp_err_t err = s_ws ? ESP_OK : ESP_FAIL;
@@ -877,6 +905,16 @@ esp_err_t zello_connect(void)
     set_state(ZELLO_CONNECTING, "");
     log_add("Connecting to %s", url);
     return ESP_OK;
+}
+
+esp_err_t zello_connect(void)
+{
+    return connect_session(false);
+}
+
+esp_err_t zello_auto_connect(void)
+{
+    return connect_session(true);
 }
 
 static void reconfigure_task(void *arg)
