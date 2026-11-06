@@ -115,7 +115,8 @@ button:disabled{opacity:.5;cursor:default}
     <input id="f-name" maxlength="64" autocapitalize="off" autocomplete="off" placeholder="e.g. My Channel">
     <label for="f-desc">Note (optional)</label>
     <input id="f-desc" maxlength="63" placeholder="Only shown here">
-    <p class="hint">Save at the bottom of the page keeps it; Close drops the change.</p>
+    <button id="f-save" class="go" type="button">Save channel</button>
+    <p class="hint">Close drops the change.</p>
     <button id="f-del" class="stop" type="button">Delete</button>
   </div>
   <div id="cmsg" class="msg"></div>
@@ -268,6 +269,7 @@ function saveButton(){
   const any=dirty.account||dirty.audio||dirty.channel,b=$('save');
   b.disabled=saving||!any;b.textContent=saving?'Saving…':any?'Save settings':'No unsaved changes';
   $('up').disabled=$('sdi').disabled=saving;
+  $('f-save').disabled=saving||!dirty.channel;
 }
 function markDirty(group){revision[group]++;dirty[group]=true;$('smsg').className='msg';saveButton()}
 function acknowledge(group,submitted){
@@ -277,18 +279,21 @@ function acknowledge(group,submitted){
 }
 ['network','user','apass','token','wnet'].forEach(id=>{$(id).addEventListener('input',()=>markDirty('account'));
   $(id).addEventListener('change',()=>markDirty('account'))});
-$('save').onclick=async()=>{
+// Saves the dirty groups among `groups`, reporting in `out`: the page's Save
+// takes everything, the channel form's own button just the channel.
+async function save(groups,out){
   if(saving)return;
+  const want=g=>dirty[g]&&groups.includes(g);
   const cname=$('f-name').value;
-  if(dirty.channel&&!cname){msg($('smsg'),'err','Give the channel a name, or close it.');$('f-name').focus();return}
-  const error=dirty.channel&&(textError(cname,64,'The channel name')||textError($('f-desc').value,63,'The note'));
-  if(error){msg($('smsg'),'err',error);return}
+  if(want('channel')&&!cname){msg(out,'err','Give the channel a name, or close it.');$('f-name').focus();return}
+  const error=want('channel')&&(textError(cname,64,'The channel name')||textError($('f-desc').value,63,'The note'));
+  if(error){msg(out,'err',error);return}
   const submitted={...revision},session=formSession,isNew=!editing,query=$('q').value;
   const pending={
-    audio:dirty.audio?{volume:+$('vol').value,mic_gain:+$('gain').value,ptt_latch:$('latch').checked}:null,
-    account:dirty.account?{network:$('network').value,username:$('user').value.trim(),password:$('apass').value,
+    audio:want('audio')?{volume:+$('vol').value,mic_gain:+$('gain').value,ptt_latch:$('latch').checked}:null,
+    account:want('account')?{network:$('network').value,username:$('user').value.trim(),password:$('apass').value,
       auth_token:$('token').value.trim(),work_network:$('wnet').value.trim()}:null,
-    channel:dirty.channel?{orig_name:editing?editing.name:'',name:cname,desc:$('f-desc').value.trim()}:null
+    channel:want('channel')?{orig_name:editing?editing.name:'',name:cname,desc:$('f-desc').value.trim()}:null
   };
   saving=true;saveButton();
   const done=[];
@@ -317,12 +322,14 @@ $('save').onclick=async()=>{
       // Adding one by hand means you want to be in it.
       if(isNew){await api('/api/channels/join',{name:cname});done.push('Joining '+cname+'…')}
     }
-    msg($('smsg'),'ok',done.join(' '));refresh();
+    msg(out,'ok',done.join(' '));refresh();
   }catch(e){
     // Whatever did save is no longer dirty; the rest stays for another try.
-    msg($('smsg'),'err',(done.length?done.join(' ')+' ':'')+e.message);
+    msg(out,'err',(done.length?done.join(' ')+' ':'')+e.message);
   }finally{saving=false;saveButton()}
-};
+}
+$('save').onclick=()=>save(['audio','account','channel'],$('smsg'));
+$('f-save').onclick=()=>save(['channel'],$('cmsg'));
 // ---- channels ----
 // The channel form is open for `editing` (null: a new channel) while formOpen.
 let channels=[],editing=null,formOpen=false,formSession=0;
@@ -360,7 +367,8 @@ function closeForm(){
   editing=null;formOpen=false;$('cform').style.display='none';
   dirty.channel=false;saveButton();$('add').textContent='Add a channel';renderChannels();
 }
-['f-name','f-desc'].forEach(id=>$(id).addEventListener('input',()=>markDirty('channel')));
+['f-name','f-desc'].forEach(id=>{$(id).addEventListener('input',()=>markDirty('channel'));
+  $(id).addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();$('f-save').click()}})});
 $('clist').onclick=async e=>{
   const edit=e.target.closest('button[data-i]');
   if(edit){const c=channels[+edit.dataset.i];(formOpen&&editing&&editing.name===c.name)?closeForm():openForm(c);return}
