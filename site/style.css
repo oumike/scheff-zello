@@ -1,0 +1,111 @@
+:root {
+  color-scheme: dark;
+  --bg: #0f1412;
+  --panel: #18201c;
+  --line: #2a3530;
+  --text: #e6ece8;
+  --muted: #8d9a93;
+  --leaf: #4fb477;
+  --leaf-dark: #2f7d4f;
+  --warn: #e0a84f;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: radial-gradient(ellipse at top, #16241c, var(--bg) 60%);
+  color: var(--text);
+  display: grid;
+  place-items: center;
+}
+
+main {
+  width: min(32rem, 100% - 2rem);
+  padding: 3rem 0;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+
+h1 { margin: 0; font-size: 1.6rem; letter-spacing: -0.01em; }
+header p { margin: 0.2rem 0 0; color: var(--muted); }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 1.5rem;
+}
+
+h2 { margin: 0 0 1rem; font-size: 1.1rem; }
+
+label {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-bottom: 0.35rem;
+}
+
+select {
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.6rem 0.7rem;
+}
+
+select:focus-visible, button:focus-visible, a:focus-visible {
+  outline: 2px solid var(--leaf);
+  outline-offset: 2px;
+}
+
+.note {
+  font-size: 0.85rem;
+  color: var(--warn);
+  margin: 0.75rem 0 0;
+  line-height: 1.4;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 1.25rem;
+}
+
+.actions [hidden] { display: none; }
+
+button.primary {
+  font: inherit;
+  font-weight: 600;
+  color: #08130c;
+  background: var(--leaf);
+  border: 0;
+  border-radius: 8px;
+  padding: 0.65rem 1.1rem;
+  cursor: pointer;
+}
+
+button.primary:hover { background: #63c78a; }
+
+.muted { color: var(--muted); font-size: 0.85rem; }
+.warn { color: var(--warn); font-size: 0.9rem; }
+
+a { color: var(--leaf); }
+
+footer {
+  display: flex;
+  gap: 1.25rem;
+  justify-content: center;
+  margin-top: 1.5rem;
+  font-size: 0.9rem;
+}

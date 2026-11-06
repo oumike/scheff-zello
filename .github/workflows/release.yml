@@ -1,0 +1,104 @@
+name: Release
+
+# Manual only: Actions -> Release -> Run workflow. Builds every board with the
+# new version, commits VERSION, tags vX.Y.Z, publishes the factory images as a
+# GitHub release and redeploys the site so its flasher offers them.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version, e.g. 0.2.0 (blank = VERSION if untagged, else bump its patch)'
+        type: string
+        default: ''
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: Pick version
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    outputs:
+      version: ${{ steps.pick.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: pick
+        env:
+          REQUESTED: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          current=$(head -n1 VERSION)
+          if [ -n "$REQUESTED" ]; then
+            version="${REQUESTED#v}"
+          elif git rev-parse -q --verify "refs/tags/v$current" >/dev/null; then
+            IFS=. read -r major minor patch <<<"$current"
+            version="$major.$minor.$((patch + 1))"
+          else
+            version="$current"
+          fi
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::'$version' is not a MAJOR.MINOR.PATCH version."
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            echo "::error::v$version is already tagged."
+            exit 1
+          fi
+          echo "Releasing v$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: version
+    uses: ./.github/workflows/build.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+
+  publish:
+    name: Publish
+    needs: [ version, build ]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: firmware-*
+          path: dist
+          merge-multiple: true
+
+      - name: Commit, tag and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          printf '%s\n' "$VERSION" > VERSION
+          if ! git diff --quiet VERSION; then
+            git commit -m "Release v$VERSION [skip ci]" VERSION
+            git push origin HEAD:main
+          fi
+          git tag "v$VERSION"
+          git push origin "v$VERSION"
+          gh release create "v$VERSION" dist/*.bin \
+            --title "v$VERSION" --generate-notes --verify-tag
+
+  pages:
+    needs: publish
+    uses: ./.github/workflows/pages.yml
+    permissions:
+      contents: read
+      pages: write
+      id-token: write

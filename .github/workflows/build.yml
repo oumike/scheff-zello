@@ -1,0 +1,102 @@
+name: Build
+
+# A breakage check from a clean checkout: a local build reuses caches and can
+# see untracked files, so it cannot catch a missing header or a gitignored
+# dependency. This job publishes nothing; release.yml cuts releases.
+
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - 'site/**'
+      - 'docs/**'
+      - 'README.md'
+      - '.gitignore'
+      - '.github/workflows/pages.yml'
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+  # release.yml builds through this workflow with the version it is cutting.
+  workflow_call:
+    inputs:
+      version:
+        description: 'Version to stamp into VERSION before building'
+        type: string
+        default: ''
+
+concurrency:
+  group: build-${{ github.ref }}-${{ inputs.version || 'ci' }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  host-tests:
+    name: Host tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # The web handler tests compile against the cJSON that ESP-IDF bundles.
+      - name: Fetch cJSON
+        run: |
+          git -c advice.detachedHead=false clone --quiet --depth 1 --branch v1.7.19 \
+            https://github.com/DaveGamble/cJSON.git "$RUNNER_TEMP/cJSON"
+          echo "CJSON_DIR=$RUNNER_TEMP/cJSON" >> "$GITHUB_ENV"
+
+      - name: Unit tests
+        run: python3 -m unittest discover -s tests -v
+
+  firmware:
+    name: Firmware (${{ matrix.env }})
+    needs: host-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [ tdisplay-p4, tdeck, wio-tracker-l2, tanmatsu ]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Only the toolchains and frameworks are cached, never build output.
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio-p4
+          key: pio-${{ runner.os }}-${{ matrix.env }}-${{ hashFiles('platformio.ini', 'main/idf_component.yml') }}
+          restore-keys: pio-${{ runner.os }}-${{ matrix.env }}-
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Set version
+        if: inputs.version != ''
+        env:
+          VERSION: ${{ inputs.version }}
+        run: printf '%s\n' "$VERSION" > VERSION
+
+      - name: Build
+        env:
+          ZELLO_BUILD_DIR: ${{ github.workspace }}/.pio/ci
+        run: ./scripts/build-upload-monitor.sh --${{ matrix.env }} --just-build
+
+      - name: Package
+        run: python3 scripts/package-firmware.py ${{ matrix.env }} .pio/ci/${{ matrix.env }} dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ matrix.env }}
+          path: dist/*.bin
+          if-no-files-found: error
+          retention-days: 14

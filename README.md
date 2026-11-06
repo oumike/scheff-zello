@@ -96,6 +96,16 @@ implemented; it has not yet been through a long soak test on hardware.
   the internal flash. [recovery.tanmatsu.cloud](https://recovery.tanmatsu.cloud)
   puts the launcher back.
 
+## Installing
+
+Flash a release from the browser at
+**[oumike.github.io/scheff-zello](https://oumike.github.io/scheff-zello/)**
+(desktop Chrome or Edge), or write a `scheff-zello-<board>.bin` from
+[Releases](https://github.com/oumike/scheff-zello/releases) at offset 0:
+`esptool.py write_flash 0x0 scheff-zello-<board>.bin`. The browser flasher
+keeps the saved settings unless you choose to erase; the release `.bin` is the
+complete image and resets them.
+
 ## Building
 
 PlatformIO fetches and manages ESP-IDF itself; no separate install is needed.
@@ -139,6 +149,25 @@ the pioarduino platform this project needs cannot be replaced by the
 tree, because ESP-IDF refuses a build directory whose path contains a space.
 
 Plain `idf.py build` against an ESP-IDF v5.5.4+ checkout works too.
+
+### CI and releases
+
+GitHub Actions (`.github/workflows/`):
+
+- **Build** runs the host tests and builds every board from a clean checkout on
+  each push and pull request to `main`; the factory images are kept as run
+  artifacts.
+- **Release** (run by hand from the Actions tab) builds every board with the
+  new version, commits `VERSION`, tags `vX.Y.Z`, publishes the images as a
+  GitHub release and redeploys the site. Leave the version blank to release
+  `VERSION` as-is, or its next patch if that is already tagged.
+- **Pages** publishes `site/` with the latest release's images and an
+  esp-web-tools manifest per board (from `site/devices.json`).
+  `scripts/build-site.py` splits each image around its data partitions so the
+  web flasher leaves NVS and the channel store alone.
+
+`scripts/package-firmware.py` copies a build's merged `firmware.factory.bin`
+to `dist/` after checking its bootloader and partition table offsets.
 
 ## Setting it up
 

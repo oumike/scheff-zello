@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scheff for Zello</title>
+  <meta name="description" content="Zello push-to-talk firmware for ESP32 handhelds, with a browser flasher.">
+  <link rel="icon" href="scheff.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="https://unpkg.com/esp-web-tools@10.4.0/dist/web/install-button.js?module"></script>
+</head>
+<body>
+  <main>
+    <header>
+      <img src="scheff.svg" alt="" width="56" height="56">
+      <div>
+        <h1>Scheff for Zello</h1>
+        <p>Zello push-to-talk for ESP32 handhelds.</p>
+      </div>
+    </header>
+
+    <section class="panel" aria-labelledby="flash-title">
+      <h2 id="flash-title">Flash</h2>
+      <label for="device">Device</label>
+      <select id="device"></select>
+      <p id="note" class="note" hidden></p>
+      <div class="actions">
+        <esp-web-install-button id="install">
+          <button slot="activate" class="primary">Connect &amp; install</button>
+          <span slot="unsupported" class="warn">Needs desktop Chrome or Edge (Web Serial).</span>
+          <span slot="not-allowed" class="warn">Needs a secure (https) page.</span>
+        </esp-web-install-button>
+        <span id="version" class="muted"></span>
+      </div>
+      <p id="status" class="muted" hidden></p>
+    </section>
+
+    <footer>
+      <a href="https://github.com/oumike/scheff-zello">Source</a>
+      <a href="https://github.com/oumike/scheff-zello/releases">Releases</a>
+      <a href="https://github.com/oumike/scheff-zello#readme">Docs</a>
+    </footer>
+  </main>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

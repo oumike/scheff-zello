@@ -1,0 +1,11 @@
+[
+  { "env": "tdisplay-p4", "name": "LilyGO T-Display-P4", "chip": "ESP32-P4" },
+  { "env": "tdeck", "name": "LilyGO T-Deck / T-Deck Plus", "chip": "ESP32-S3" },
+  { "env": "wio-tracker-l2", "name": "Seeed Wio Tracker L2", "chip": "ESP32-S3" },
+  {
+    "env": "tanmatsu",
+    "name": "Nicolai Electronics Tanmatsu",
+    "chip": "ESP32-P4",
+    "note": "Replaces the launcher (restore it at recovery.tanmatsu.cloud). It shows two ports; if the flasher finds an ESP32-C6, connect again and pick the other one."
+  }
+]
