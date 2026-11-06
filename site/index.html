@@ -15,9 +15,16 @@
       <img src="scheff.svg" alt="" width="56" height="56">
       <div>
         <h1>Scheff for Zello</h1>
-        <p>Zello push-to-talk for ESP32 handhelds.</p>
+        <p>Zello push-to-talk firmware for ESP32 handhelds.</p>
       </div>
     </header>
+
+    <p class="lede">
+      Scheff turns an ESP32 handheld into a pocket Zello radio. It signs in to your
+      Zello account over Wi-Fi, joins a channel, and carries voice both ways through
+      the board's own microphone and speaker, along with the channel's text messages.
+      No phone and no extra hardware.
+    </p>
 
     <section class="panel" aria-labelledby="flash-title">
       <h2 id="flash-title">Flash</h2>
@@ -33,6 +40,133 @@
         <span id="version" class="muted"></span>
       </div>
       <p id="status" class="muted" hidden></p>
+    </section>
+
+
+    <section aria-labelledby="what-title">
+      <h2 id="what-title">What it does</h2>
+      <ul class="features">
+        <li><strong>Push-to-talk on Zello.</strong> Hold the big button (or the board's talk
+          button) to talk. It turns green when the channel is yours and red with the
+          talker's name while someone else has it.</li>
+        <li><strong>Text messages.</strong> The channel's messages scroll in the activity
+          panel, and you can type and send your own from the device or the browser.</li>
+        <li><strong>Set up from the screen or a browser.</strong> Every setting is on the
+          touch screen and on a built-in web page. Change it in one and the other follows.</li>
+        <li><strong>Your own channel list.</strong> Favorites go to the top, then channels by how often you join them.</li>
+        <li><strong>Screensaver.</strong> A schefflera bounces round the screen, showing who is talking.
+          Audio keeps playing, and a pocket can't wake it by accident.</li>
+        <li><strong>Backup and restore.</strong> One YAML file holds every setting and the
+          channel list. Download it, or write it to a microSD card.</li>
+        <li><strong>Crash and disconnect reports</strong> go to microSD, so problems can be traced.</li>
+      </ul>
+    </section>
+
+    <section aria-labelledby="devices-title">
+      <h2 id="devices-title">Supported devices</h2>
+      <div class="cards">
+        <div class="card">
+          <h3>LilyGO T-Display-P4</h3>
+          <p>ESP32-P4 with a 568&times;1232 AMOLED. Talk with the on-screen button; <kbd>BOOT</kbd> is the screen button.</p>
+        </div>
+        <div class="card">
+          <h3>LilyGO T-Deck / T-Deck Plus</h3>
+          <p>ESP32-S3 with keyboard and trackball. Hold the trackball click to talk, or press <kbd>Space</kbd> to start and again to stop.</p>
+        </div>
+        <div class="card">
+          <h3>Seeed Wio Tracker L2</h3>
+          <p>ESP32-S3 with a touch screen. Hold the GPIO0 button or tap Talk; <kbd>Wake</kbd> is the screen button.</p>
+        </div>
+        <div class="card">
+          <h3>Nicolai Electronics Tanmatsu</h3>
+          <p>ESP32-P4 with a full keyboard. <em>Listen and text only</em>, as it has no microphone. Replaces the badge.team launcher.</p>
+        </div>
+      </div>
+    </section>
+
+    <section aria-labelledby="setup-title">
+      <h2 id="setup-title">Connecting your Zello account</h2>
+      <p>Every step works on the device's screen <em>or</em> in a browser, and each one follows the other.</p>
+
+      <ol class="steps">
+        <li>
+          <h3>Flash and power on</h3>
+          <p>Install the firmware with the button above. On first boot the device starts an
+            open Wi-Fi hotspot called <code>Scheff-XXXX</code>.</p>
+        </li>
+        <li>
+          <h3>Open the setup page</h3>
+          <p>Join the <code>Scheff-XXXX</code> hotspot from your phone or computer and go to
+            <code>http://192.168.4.1</code>. There is no captive portal, so nothing pops up on its own;
+            type in the address.</p>
+        </li>
+        <li>
+          <h3>Put it on your Wi-Fi</h3>
+          <p>Pick your network from the scan, or type its name, and enter the password. The device
+            joins, saves it and restarts. The hotspot closes, and from then on the setup page is at
+            <code>http://&lt;device-ip&gt;</code>. The address is shown at the bottom of every setup screen.</p>
+        </li>
+        <li>
+          <h3>Get a Zello developer token</h3>
+          <p>The public Zello network (zello.io) only lets third-party clients sign in with a
+            <strong>developer token</strong>, a long JWT. Sign in at
+            <a href="https://developers.zello.com" target="_blank" rel="noreferrer">developers.zello.com</a>
+            with your Zello account and generate a token there.
+            Skip this step for Zello Work.</p>
+        </li>
+        <li>
+          <h3>Enter the account</h3>
+          <p>In <em>Zello account</em> on the setup page:</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th></th><th>Zello (zello.io)</th><th>Zello Work</th></tr>
+              </thead>
+              <tbody>
+                <tr><th>Network</th><td>Zello (zello.io)</td><td>Zello Work</td></tr>
+                <tr><th>Username / password</th><td>Your Zello login</td><td>Your Zello Work login</td></tr>
+                <tr><th>Developer token</th><td><strong>Paste the whole token</strong></td><td>Not used</td></tr>
+                <tr><th>Network name</th><td>Not used</td><td><strong>Your network's subdomain</strong></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>Paste the token in the <strong>browser</strong>. It is far too long to type on the device.
+            Once you save, the device signs in to Zello straight away.</p>
+        </li>
+        <li>
+          <h3>Pick a channel</h3>
+          <p>Zello has no public channel directory, so add the channels you want by name. Names must match
+            <strong>exactly</strong>, including spaces and capitals. Channels you join successfully are saved to the
+            list. Then hold the button and talk.</p>
+        </li>
+      </ol>
+
+      <div class="callouts">
+        <div class="callout">
+          <h3>Token expired?</h3>
+          <p>Development tokens expire (typically after 30 days). When Zello refuses the sign-in, the device shows the
+            token's expiry date and says to get a new one. Paste the new token in the setup page; leaving the field
+            blank keeps the saved one.</p>
+        </div>
+        <div class="callout">
+          <h3>Your credentials</h3>
+          <p>The password and token stay on the device. The setup page never sends them back to the browser;
+            it only shows whether one is saved. A backup file <em>does</em> contain them, unencrypted, so keep
+            it somewhere safe.</p>
+        </div>
+      </div>
+    </section>
+
+    <section aria-labelledby="use-title">
+      <h2 id="use-title">Using it</h2>
+      <ul class="features">
+        <li>Zello is half duplex: while someone else is talking, pressing to talk does nothing.</li>
+        <li>Turn on <em>tap to talk</em> in the web page's Audio section to press once to start and again to stop.</li>
+        <li>Activity (who joined, who is talking, messages, errors) scrolls on screen and under
+          <em>Channel activity</em> in the browser. An incoming message beeps.</li>
+        <li>After 2 minutes untouched the screensaver comes up, and after 10 more the screen goes dark.
+          Hold the screen button for 2 seconds to get back.</li>
+      </ul>
     </section>
 
     <footer>
