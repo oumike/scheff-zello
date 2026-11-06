@@ -406,6 +406,28 @@ int main(void) {
 }
 """, headers, [ROOT / "main/opus_codec.c"])
 
+    def test_jwt_expiry_reads_exp_claim(self):
+        self.run_c(r"""
+#include <assert.h>
+#include <stdint.h>
+#include "jwt_util.h"
+int main(void) {
+    int64_t exp = 0;
+    // {"alg":"RS256","typ":"JWT"} . {"iss":"x","exp":1730000000} . sig, unpadded base64url
+    assert(jwt_expiry("eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJ4IiwiZXhwIjoxNzMwMDAwMDAwfQ.c2ln", &exp));
+    assert(exp == 1730000000);
+    // {"note":"\"exp\":5","exp" : 42}: "exp" inside a string value is skipped
+    assert(jwt_expiry("h.eyJub3RlIjoiXCJleHBcIjo1IiwiZXhwIiA6IDQyfQ.s", &exp));
+    assert(exp == 42);
+    // {"iss":"x"}: no expiry
+    assert(!jwt_expiry("h.eyJpc3MiOiJ4In0.s", &exp));
+    // truncated paste: no second dot, or a bad character
+    assert(!jwt_expiry("h.eyJleHAiOjF9", &exp));
+    assert(!jwt_expiry("h.ey!J.s", &exp));
+    assert(!jwt_expiry("not a token", &exp));
+}
+""", extra_sources=[ROOT / "main/jwt_util.c"])
+
 
 if __name__ == "__main__":
     unittest.main()

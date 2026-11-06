@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
@@ -18,6 +19,7 @@
 #include "audio.h"
 #include "channel_list.h"
 #include "crash_report.h"
+#include "jwt_util.h"
 #include "opus_codec.h"
 #include "settings.h"
 
@@ -478,6 +480,40 @@ static uint32_t json_u32(cJSON *obj, const char *key)
     return cJSON_IsNumber(v) && v->valuedouble > 0 ? (uint32_t)v->valuedouble : 0;
 }
 
+// Before this, the clock hasn't been set from the network.
+#define CLOCK_VALID_AFTER 1704067200  // 2024-01-01
+
+// Why the server refused the logon, in words: Zello only says "not
+// authorized", which on the public network is most often a developer token
+// past its 30 days.
+static void explain_logon_error(const char *error, char *out, size_t len)
+{
+    if (!error[0]) error = "unknown reason";
+    bool token = g_settings.network == ZELLO_NET_CONSUMER && g_settings.auth_token[0];
+    if (!token || strcmp(error, "not authorized") != 0) {
+        snprintf(out, len, "Zello rejected the logon: %s", error);
+        return;
+    }
+    int64_t exp;
+    if (!jwt_expiry(g_settings.auth_token, &exp)) {
+        snprintf(out, len, "Zello rejected the logon: not authorized. The developer token is unreadable; paste it again.");
+        return;
+    }
+    char date[16];
+    time_t t = (time_t)exp;
+    struct tm tm;
+    gmtime_r(&t, &tm);
+    strftime(date, sizeof(date), "%Y-%m-%d", &tm);
+    time_t now = time(NULL);
+    if (now < CLOCK_VALID_AFTER) {
+        snprintf(out, len, "Zello rejected the logon: not authorized (developer token valid until %s).", date);
+    } else if (now >= t) {
+        snprintf(out, len, "The Zello developer token expired on %s. Get a new one at developers.zello.com.", date);
+    } else {
+        snprintf(out, len, "Zello rejected the logon: not authorized. Check the username and password.");
+    }
+}
+
 // A reply to one of our commands: no "command", just our seq.
 static void handle_response(int seq, cJSON *j)
 {
@@ -501,7 +537,7 @@ static void handle_response(int seq, cJSON *j)
             log_add("Logged in.");
         } else {
             char msg[128];
-            snprintf(msg, sizeof(msg), "Zello rejected the logon: %s", error[0] ? error : "unknown reason");
+            explain_logon_error(error, msg, sizeof(msg));
             // Don't reconnect in a loop on bad credentials or a stale token.
             s_want_connect = false;
             s_stop_requested = true;

@@ -1,6 +1,6 @@
 set(srcs "app_main.c" "board.c" "display.c" "audio.c" "ptt.c" "sdcard.c"
          "lv_mem_psram.c" "net_wifi.c" "settings.c" "file_store.c" "xml_util.c" "yaml_util.c" "channel_list.c"
-         "opus_codec.c" "zello_client.c" "onboard.c" "web_config.c"
+         "opus_codec.c" "jwt_util.c" "zello_client.c" "onboard.c" "web_config.c"
          "console_cmds.c" "crash_report.c"
          "ui.c" "ui_wifi.c" "ui_account.c" "ui_channels.c" "ui_home.c")
 
