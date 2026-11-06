@@ -22,7 +22,8 @@ show_usage() {
 	echo "  --wio-tracker-l2  Build for the Seeed Wio Tracker L2."
 	echo "  --tanmatsu    Build for the Nicolai Electronics Tanmatsu (replaces its launcher)."
 	echo "  --port PORT   Serial port of the selected device (e.g. /dev/cu.usbmodem1101)."
-	echo "                If omitted, PlatformIO auto-detects the port."
+	echo "                If omitted, PlatformIO auto-detects the port; on the Tanmatsu"
+	echo "                (two ports: the P4 and its C6) each port is tried in turn."
 	echo "  --erase, -E   Erase flash before build/upload. This wipes NVS, so the"
 	echo "                Wi-Fi and Zello settings have to be entered again."
 	echo "  --fullclean, -F  Run PlatformIO fullclean before upload"
@@ -54,6 +55,53 @@ run_pio_target() {
 	fi
 	echo "[PIO] $label ($ENV_NAME)..."
 	run_pio run -e "$ENV_NAME" -t "$target" ${port_args[@]+"${port_args[@]}"}
+}
+
+# The Tanmatsu enumerates two USB serial ports: the ESP32-P4 and its ESP32-C6
+# radio. PlatformIO's auto-detect can pick the C6, which is harmless (esptool
+# aborts on the chip mismatch before writing anything), so without --port try
+# each port in turn and keep the first that works for the later steps, as
+# camillia-mt does.
+needs_port_fallback() {
+	[ "$ENV_NAME" = "tanmatsu" ] && [ -z "$PORT" ]
+}
+
+serial_port_candidates() {
+	local p
+	for p in /dev/cu.usbmodem* /dev/ttyACM*; do
+		[ -e "$p" ] && echo "$p"
+	done
+	return 0
+}
+
+run_pio_flash_target() {
+	local target="$1"
+	local label="$2"
+
+	if ! needs_port_fallback; then
+		run_pio_target "$target" "$label"
+		return
+	fi
+
+	local ports=() p
+	while IFS= read -r p; do
+		ports+=("$p")
+	done < <(serial_port_candidates)
+	if [ "${#ports[@]}" -eq 0 ]; then
+		echo "[PIO] No USB serial ports found for $ENV_NAME. Is the device connected?"
+		return 1
+	fi
+
+	for p in "${ports[@]}"; do
+		echo "[PIO] $label ($ENV_NAME) on $p..."
+		if run_pio run -e "$ENV_NAME" -t "$target" --upload-port "$p"; then
+			PORT="$p"
+			return 0
+		fi
+		echo "[PIO] $label failed on $p."
+	done
+	echo "[PIO] $label failed on every port: ${ports[*]}"
+	return 1
 }
 
 # A monitor left running from an earlier run of this script (in another
@@ -175,7 +223,7 @@ fi
 
 if [ "$ERASE_FIRST" = true ]; then
 	release_port
-	run_pio_target "erase" "Erasing device flash"
+	run_pio_flash_target "erase" "Erasing device flash"
 fi
 
 # The build directory is per board, but PlatformIO's generated linker script
@@ -198,8 +246,13 @@ if [ "$JUST_BUILD" = true ]; then
 	echo "[PIO] Build ($ENV_NAME)..."
 	run_pio run -e "$ENV_NAME"
 else
+	if needs_port_fallback; then
+		# Build once up front so a compile error fails once, not once per port.
+		echo "[PIO] Build ($ENV_NAME)..."
+		run_pio run -e "$ENV_NAME"
+	fi
 	release_port
-	run_pio_target "upload" "Upload"
+	run_pio_flash_target "upload" "Upload"
 fi
 BUILD_END_TS="$(date +%s)"
 mkdir -p "$BUILD_DIR" && echo "$ENV_NAME" >"$LAST_ENV_FILE"
