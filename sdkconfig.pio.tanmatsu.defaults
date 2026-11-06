@@ -7,7 +7,10 @@ CONFIG_ZELLO_BOARD_TANMATSU=y
 CONFIG_BSP_TARGET_TANMATSU=y
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
-CONFIG_LCD_DSI_ISR_IRAM_SAFE=y
+# Not CONFIG_LCD_DSI_ISR_IRAM_SAFE (wadamesh sets it): it makes the DPI driver
+# refuse esp_lvgl_port's flush-done callback, which lives in flash, and LVGL
+# then waits for every flush forever. Code runs from PSRAM here
+# (sdkconfig.defaults.esp32p4), so flash writes don't stall the ISR anyway.
 
 # Wi-Fi on the C6 over ESP-Hosted SDIO (Nicolai's esp-hosted-tanmatsu). The C6
 # has no reset line: main/net_wifi.c resets it by switching its power through
