@@ -8,7 +8,7 @@
 
 static const char *TAG = "board";
 
-#if CONFIG_IDF_TARGET_ESP32P4 || CONFIG_ZELLO_BOARD_WIO_TRACKER_L2
+#if CONFIG_ZELLO_BOARD_TDISPLAY_P4 || CONFIG_ZELLO_BOARD_WIO_TRACKER_L2
 
 // PCA9535-style 16-bit I/O expander: the P4's XL9535 and the Wio Tracker L2's
 // PCA9555 share the register map. Pin n is bit n (IO0..IO7, then IO10..IO17).
@@ -96,7 +96,7 @@ static uint8_t lipo_percent(int mv)
 
 #endif
 
-#if CONFIG_IDF_TARGET_ESP32P4
+#if CONFIG_ZELLO_BOARD_TDISPLAY_P4
 
 #define XL9535_ADDR     0x20
 
@@ -212,6 +212,65 @@ i2c_master_bus_handle_t board_main_i2c_bus(void)
 i2c_master_bus_handle_t board_codec_i2c_bus(void)
 {
     return s_i2c2;
+}
+
+#elif CONFIG_ZELLO_BOARD_TANMATSU
+
+#include "bsp/audio.h"
+#include "bsp/device.h"
+#include "bsp/i2c.h"
+#include "bsp/power.h"
+
+esp_err_t board_init(void)
+{
+    // The I2C bus, the coprocessor (keyboard, backlight, power, radio power,
+    // amplifier), the display, input, the RTC, the ES8156 DAC and its I2S
+    // channel, in the order the BSP needs them.
+    const bsp_configuration_t cfg = {
+        .display = {
+            .requested_color_format = BSP_DISPLAY_COLOR_FORMAT_16_565RGB,
+            .num_fbs = 1,
+        },
+    };
+    ESP_RETURN_ON_ERROR(bsp_device_initialize(&cfg), TAG, "bsp");
+    if (bsp_device_get_initialized_without_coprocessor()) {
+        ESP_LOGE(TAG, "coprocessor not answering: no keyboard, backlight or radio power");
+    }
+    ESP_LOGI(TAG, "Tanmatsu ready");
+    return ESP_OK;
+}
+
+esp_err_t board_audio_power(bool on)
+{
+    return bsp_audio_set_amplifier(on);
+}
+
+esp_err_t board_sd_power(bool on)
+{
+    return ESP_OK;
+}
+
+esp_err_t board_battery_percent(uint8_t *percent)
+{
+    if (!percent) return ESP_ERR_INVALID_ARG;
+    bsp_power_battery_information_t info;
+    ESP_RETURN_ON_ERROR(bsp_power_get_battery_information(&info), TAG, "battery");
+    if (!info.battery_available) return ESP_ERR_NOT_FOUND;
+    double p = info.remaining_percentage;
+    *percent = p < 0 ? 0 : p > 100 ? 100 : (uint8_t)(p + 0.5);
+    return ESP_OK;
+}
+
+i2c_master_bus_handle_t board_main_i2c_bus(void)
+{
+    i2c_master_bus_handle_t bus = NULL;
+    bsp_i2c_primary_bus_get_handle(&bus);
+    return bus;
+}
+
+i2c_master_bus_handle_t board_codec_i2c_bus(void)
+{
+    return board_main_i2c_bus();
 }
 
 #elif CONFIG_ZELLO_BOARD_WIO_TRACKER_L2

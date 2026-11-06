@@ -1,0 +1,33 @@
+# Nicolai Electronics Tanmatsu (ESP32-P4 + ESP32-C6). Layered by platformio.ini
+# on sdkconfig.defaults, sdkconfig.pio.defaults and sdkconfig.pio.p4.defaults
+# (the chip revision: Tanmatsus ship with pre rev 3.0 P4s too); ESP-IDF adds
+# sdkconfig.defaults.esp32p4 (PSRAM, caches) on its own. The rest follows
+# wadamesh's and the Tanmatsu launcher's settings.
+CONFIG_ZELLO_BOARD_TANMATSU=y
+CONFIG_BSP_TARGET_TANMATSU=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_LCD_DSI_ISR_IRAM_SAFE=y
+
+# Wi-Fi on the C6 over ESP-Hosted SDIO (Nicolai's esp-hosted-tanmatsu). The C6
+# has no reset line: main/net_wifi.c resets it by switching its power through
+# the coprocessor.
+CONFIG_SLAVE_IDF_TARGET_ESP32C6=y
+CONFIG_ESP_HOSTED_CP_TARGET_ESP32C6=y
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_CMD_SLOT_1=16
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_CLK_SLOT_1=17
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D0_SLOT_1=18
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D1_4BIT_BUS_SLOT_1=19
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D2_4BIT_BUS_SLOT_1=20
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D3_4BIT_BUS_SLOT_1=21
+CONFIG_ESP_HOSTED_SDIO_RESET_SLAVE_USING_CALLBACK=y
+CONFIG_ESP_HOSTED_SLAVE_RESET_ONLY_IF_NECESSARY=y
+CONFIG_ESP_HOSTED_HOST_RESTART_NO_COMMUNICATION_WITH_SLAVE=n
+
+# The UI's font sizes on the 800x480 screen (20 and 28 are already on).
+CONFIG_LV_FONT_MONTSERRAT_16=y
+
+# badge-bsp hands messages to the launcher through RTC memory the bootloader
+# leaves alone.
+CONFIG_BOOTLOADER_CUSTOM_RESERVE_RTC=y
+CONFIG_BOOTLOADER_CUSTOM_RESERVE_RTC_SIZE=0x100

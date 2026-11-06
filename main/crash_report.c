@@ -29,9 +29,12 @@ static const char *TAG = "crash";
 #define CRASH_DIR SDCARD_MOUNT "/crash"
 
 // Internal RAM is scarce on the S3; the P4 can afford a longer history.
-#if CONFIG_IDF_TARGET_ESP32P4
+#if CONFIG_ZELLO_BOARD_TDISPLAY_P4
 #define RING_SIZE (16 * 1024)
 #define BOARD_NAME "LilyGO T-Display-P4"
+#elif CONFIG_ZELLO_BOARD_TANMATSU
+#define RING_SIZE (16 * 1024)
+#define BOARD_NAME "Nicolai Electronics Tanmatsu"
 #elif CONFIG_ZELLO_BOARD_WIO_TRACKER_L2
 #define RING_SIZE (6 * 1024)
 #define BOARD_NAME "Seeed Wio Tracker L2"

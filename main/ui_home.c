@@ -1,26 +1,35 @@
 // Home, which on Zello is also the talk screen: who you are, which channel
-// you're in, the recent channel activity, and one big hold-to-talk button.
+// you're in, the recent channel activity, a line for sending the channel a
+// text message, and one big hold-to-talk button.
 // Channels and Settings (Wi-Fi and the account) open from the two buttons
 // at the top.
 
+#include <ctype.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include "esp_heap_caps.h"
 #include "audio.h"
 #include "display.h"
 #include "net_wifi.h"
 #include "settings.h"
 #include "ui_internal.h"
 #include "zello_client.h"
-#if CONFIG_ZELLO_BOARD_TDECK
-#include "input_tdeck.h"
+#if UI_HAS_KEYBOARD
+#include "input_keys.h"
 #endif
 
 #define REFRESH_MS 200
+// The same cap as the web config's message box.
+#define COMPOSE_MAX 256
 
 static lv_obj_t *s_scr, *s_username, *s_channel, *s_status, *s_web, *s_log;
 static lv_obj_t *s_meter, *s_talk, *s_talk_label;
+static lv_obj_t *s_kb, *s_compose, *s_volume, *s_volume_slider, *s_volume_value;
 static lv_timer_t *s_timer;
-static char s_log_cache[ZELLO_LOG_MAX];
+// The activity log is several KB: keep it and its working copy off the LVGL
+// task's stack and out of internal RAM.
+static char *s_log_cache, *s_log_buf;
 static char s_status_cache[160];
 
 // ---- header ----------------------------------------------------------------
@@ -138,7 +147,104 @@ static lv_obj_t *ui_volume_row(lv_obj_t *parent)
     lv_obj_set_style_text_color(value, UI_COLOR_MUTED, 0);
     lv_obj_set_style_text_align(value, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_add_event_cb(volume, volume_event, LV_EVENT_ALL, value);
+    s_volume_slider = volume;
+    s_volume_value = value;
     return volume_row;
+}
+
+// ---- text messages ---------------------------------------------------------
+
+// While the on-screen keyboard is up it takes the lower part of the screen,
+// so the volume, meter and talk button step aside for the message line.
+static void talk_controls_show(bool show)
+{
+    lv_obj_t *const objs[] = {s_volume, s_meter, s_talk};
+    for (size_t i = 0; i < sizeof(objs) / sizeof(objs[0]); i++) {
+        if (show) lv_obj_remove_flag(objs[i], LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(objs[i], LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void compose_send(void)
+{
+    const char *text = lv_textarea_get_text(s_compose);
+    while (isspace((unsigned char)*text)) text++;
+    if (!*text) return;
+    char msg[COMPOSE_MAX + 1];
+    strlcpy(msg, text, sizeof(msg));
+    for (size_t n = strlen(msg); n && isspace((unsigned char)msg[n - 1]); n--) msg[n - 1] = 0;
+
+    esp_err_t err = zello_send_text(msg);
+    if (err == ESP_OK) {
+        lv_textarea_set_text(s_compose, "");
+    } else {
+        // Keep the text so it can be sent once back in the channel.
+        ui_modal_message(err == ESP_ERR_INVALID_STATE ? "Not in a channel yet: the message wasn't sent."
+                                                      : "The message couldn't be sent.",
+                         UI_COLOR_STOP, true, NULL);
+    }
+}
+
+static void compose_event(lv_event_t *e)
+{
+    switch (lv_event_get_code(e)) {
+    case LV_EVENT_READY:  // Enter, on either keyboard
+        compose_send();
+        break;
+#if !UI_HAS_KEYBOARD
+    case LV_EVENT_FOCUSED: talk_controls_show(false); break;
+    case LV_EVENT_DEFOCUSED: talk_controls_show(true); break;
+#endif
+    default: break;
+    }
+}
+
+static void send_clicked(lv_event_t *e)
+{
+    compose_send();
+}
+
+#if !UI_HAS_KEYBOARD
+// The on-screen keyboard's OK and close keys. By the time this runs, the
+// screen's keyboard handler has already let go of the field, so OK sends
+// what is in it directly.
+static void home_kb_event(lv_event_t *e)
+{
+    if (lv_event_get_code(e) == LV_EVENT_READY) compose_send();
+    talk_controls_show(true);
+}
+#endif
+
+// The message line and its Send button.
+static void compose_create(lv_obj_t *parent)
+{
+    lv_obj_t *row = plain_row(parent);
+    s_compose = lv_textarea_create(row);
+    lv_textarea_set_one_line(s_compose, true);
+    lv_textarea_set_max_length(s_compose, COMPOSE_MAX);
+    lv_textarea_set_placeholder_text(s_compose, "Message the channel");
+    lv_obj_set_style_text_font(s_compose, UI_FONT_SMALL, 0);
+    lv_obj_set_height(s_compose, UI_EDIT_BUTTON_H + UI_PAD);
+    lv_obj_set_style_pad_ver(s_compose, UI_PAD / 2, 0);
+    lv_obj_set_width(s_compose, 0);
+    lv_obj_set_flex_grow(s_compose, 1);
+    // Ahead of the keyboard's own handler, so the talk controls are gone
+    // before the field is scrolled into view above the keyboard.
+    lv_obj_add_event_cb(s_compose, compose_event, LV_EVENT_ALL, NULL);
+    ui_field_attach_keyboard(s_compose, s_kb);
+
+    lv_obj_t *send = ui_button(row, LV_SYMBOL_RIGHT " Send", UI_COLOR_LINK, send_clicked, NULL);
+    lv_obj_set_size(send, LV_SIZE_CONTENT, UI_EDIT_BUTTON_H + UI_PAD);
+    lv_obj_set_style_pad_hor(send, UI_PAD * 2, 0);
+    lv_obj_set_style_text_font(lv_obj_get_child(send, 0), UI_FONT_SMALL, 0);
+    // Tapping Send must not take focus from the field: the keyboard stays up
+    // for the next message.
+    lv_obj_remove_flag(send, LV_OBJ_FLAG_CLICK_FOCUSABLE);
+
+#if !UI_HAS_KEYBOARD
+    lv_obj_add_event_cb(s_kb, home_kb_event, LV_EVENT_READY, NULL);
+    lv_obj_add_event_cb(s_kb, home_kb_event, LV_EVENT_CANCEL, NULL);
+#endif
 }
 
 // ---- periodic refresh ------------------------------------------------------
@@ -206,6 +312,8 @@ static void refresh(lv_timer_t *t)
         char label[96];
         snprintf(label, sizeof(label), LV_SYMBOL_VOLUME_MAX "  %s" TALK_SEP "is talking", st.talker);
         set_talk(UI_COLOR_STOP, label);
+    } else if (!audio_has_mic()) {
+        set_talk(UI_COLOR_PANEL, LV_SYMBOL_VOLUME_MAX "  LISTENING" TALK_SEP "no microphone: send text");
     } else {
         set_talk(UI_COLOR_GO, g_settings.ptt_latch ? LV_SYMBOL_AUDIO "  TAP TO TALK"
                                                    : LV_SYMBOL_AUDIO "  HOLD TO TALK");
@@ -216,11 +324,18 @@ static void refresh(lv_timer_t *t)
     lv_bar_set_value(s_meter, st.ptt ? audio_mic_level() : audio_play_level(), LV_ANIM_OFF);
     lv_obj_set_style_bg_color(s_meter, st.ptt ? UI_COLOR_GO_LIT : UI_COLOR_LINK, LV_PART_INDICATOR);
 
-    char log[sizeof(s_log_cache)];
-    zello_get_log(log, sizeof(log));
-    if (strcmp(log, s_log_cache)) {
-        strlcpy(s_log_cache, log, sizeof(s_log_cache));
-        lv_label_set_text(s_log, log[0] ? log : "Channel activity shows up here.");
+    // The volume can also change from keys, the web config or the console.
+    if (lv_slider_get_value(s_volume_slider) != g_settings.volume &&
+        !lv_obj_has_state(s_volume_slider, LV_STATE_PRESSED)) {
+        lv_slider_set_value(s_volume_slider, g_settings.volume, LV_ANIM_OFF);
+        lv_label_set_text_fmt(s_volume_value, "%u%%", g_settings.volume);
+    }
+
+    if (!s_log_buf) return;
+    zello_get_log(s_log_buf, ZELLO_LOG_MAX);
+    if (strcmp(s_log_buf, s_log_cache)) {
+        strlcpy(s_log_cache, s_log_buf, ZELLO_LOG_MAX);
+        lv_label_set_text(s_log, s_log_buf[0] ? s_log_buf : "Channel activity shows up here.");
         // Keep the newest line in view.
         lv_obj_scroll_to_y(lv_obj_get_parent(s_log), LV_COORD_MAX, LV_ANIM_OFF);
     }
@@ -254,7 +369,15 @@ static void meter_create(lv_obj_t *parent)
 void ui_home_show(void)
 {
     if (!s_scr) {
-        lv_obj_t *col = ui_screen_create(&s_scr, NULL);
+        s_log_cache = heap_caps_calloc(1, ZELLO_LOG_MAX, MALLOC_CAP_SPIRAM);
+        s_log_buf = heap_caps_calloc(1, ZELLO_LOG_MAX, MALLOC_CAP_SPIRAM);
+        if (!s_log_cache || !s_log_buf) {
+            free(s_log_cache);
+            free(s_log_buf);
+            s_log_cache = calloc(1, ZELLO_LOG_MAX);
+            s_log_buf = calloc(1, ZELLO_LOG_MAX);
+        }
+        lv_obj_t *col = ui_screen_create(&s_scr, &s_kb);
         lv_obj_remove_flag(col, LV_OBJ_FLAG_SCROLLABLE);
 
 #if UI_LANDSCAPE
@@ -299,14 +422,16 @@ void ui_home_show(void)
         lv_obj_set_scroll_dir(box, LV_DIR_VER);
         s_log = ui_label(box, "Channel activity shows up here.", UI_FONT_SMALL, UI_COLOR_MUTED);
 
+        compose_create(col);
+
 #if UI_LANDSCAPE
         meter_create(col);  // above the volume, under the activity panel
 #endif
-        lv_obj_t *volume = ui_volume_row(col);
+        s_volume = ui_volume_row(col);
 #if UI_LANDSCAPE
         // Clear space above and below, between the meter and the talk button.
-        lv_obj_set_height(volume, UI_FIELD_H + 4 * UI_PAD);
-        lv_obj_set_style_pad_ver(volume, 2 * UI_PAD, 0);
+        lv_obj_set_height(s_volume, UI_FIELD_H + 4 * UI_PAD);
+        lv_obj_set_style_pad_ver(s_volume, 2 * UI_PAD, 0);
 #endif
 
 #if !UI_LANDSCAPE
@@ -323,8 +448,8 @@ void ui_home_show(void)
         lv_obj_center(s_talk_label);
         set_talk(UI_COLOR_PANEL, LV_SYMBOL_AUDIO "  OFFLINE");
 
-#if CONFIG_ZELLO_BOARD_TDECK
-        input_tdeck_set_talk_screen(s_scr);
+#if UI_HAS_KEYBOARD
+        input_keys_set_talk_screen(s_scr, s_compose);
 #endif
         s_timer = lv_timer_create(refresh, REFRESH_MS, NULL);
         ui_home_refresh_account();

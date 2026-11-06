@@ -74,13 +74,16 @@ bool zello_ptt(void);
 // Handed to audio_init(); frames are dropped unless we are transmitting.
 void zello_mic_frame(const int16_t *pcm, size_t samples);
 
-// Sends a channel text message.
+// Sends a channel text message. ESP_ERR_INVALID_STATE when not in a channel.
+// A refusal from the server shows up in the log.
+//   -> {"command":"send_text_message","seq":N,"channel":..,"text":..}
+//   <- {"command":"on_text_message","channel":..,"from":..,"text":..}
 esp_err_t zello_send_text(const char *text);
 
 // The recent channel activity (joins, talkers, text messages, errors) as
 // newline-separated lines, oldest first. A buffer of ZELLO_LOG_MAX holds all
 // of it.
-#define ZELLO_LOG_MAX 2048
+#define ZELLO_LOG_MAX 8192
 void zello_get_log(char *out, size_t size);
 
 // Registers a callback run whenever the status or the log changes, so the UI

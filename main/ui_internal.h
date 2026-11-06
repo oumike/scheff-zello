@@ -11,7 +11,38 @@
 #include "display.h"
 #include "net_wifi.h"
 
-#if CONFIG_IDF_TARGET_ESP32S3
+#if CONFIG_ZELLO_BOARD_TANMATSU
+
+// Tanmatsu: an 800x480 LCD (turned to landscape) above a full keyboard, so
+// the home screen is the T-Deck's landscape layout at about two and a half
+// times the size, and the on-screen keyboard never shows.
+#define UI_PAD    8
+#define UI_GAP    8
+#define UI_BTN_H  44
+#define UI_FIELD_H 40
+#define UI_RADIUS 8
+#define UI_SAFE_TOP    0
+#define UI_SAFE_BOTTOM 0
+
+#define UI_FONT_SMALL (&lv_font_montserrat_16)
+#define UI_FONT       (&lv_font_montserrat_20)
+#define UI_FONT_TITLE (&lv_font_montserrat_28)
+#define UI_STATUS_BAR_W     190
+#define UI_STATUS_BAR_H     32
+#define UI_SPINNER_SIZE     48
+#define UI_ICON_BUTTON_SIZE 40
+#define UI_EDIT_BUTTON_H    36
+#define UI_CLEAR_BUTTON_W   40
+#define UI_TALK_BUTTON_H    70
+#define UI_SLIDER_H         16
+#define UI_VOLUME_VALUE_W   52
+#define UI_METER_H          12
+#define UI_ZELLO_ICON_DIV   1
+
+#define UI_LANDSCAPE    1
+#define UI_HAS_KEYBOARD 1
+
+#elif CONFIG_IDF_TARGET_ESP32S3
 
 // T-Deck and Wio Tracker L2: a 320x240 LCD with square corners, and the
 // home screen laid out for landscape. Everything is half the size first

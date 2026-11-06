@@ -1,12 +1,14 @@
 # Scheff for Zello
 
 **Scheff for Zello** (`scheff-zello`) is a [Zello](https://zello.com) push-to-talk client for the **LilyGO T-Display-P4**
-(ESP32-P4 + ESP32-C6), the **LilyGO T-Deck / T-Deck Plus** (ESP32-S3) and the
-**Seeed Wio Tracker L2** (ESP32-S3), built on ESP-IDF with an LVGL touch UI.
+(ESP32-P4 + ESP32-C6), the **LilyGO T-Deck / T-Deck Plus** (ESP32-S3), the
+**Seeed Wio Tracker L2** (ESP32-S3) and the **Nicolai Electronics Tanmatsu**
+(ESP32-P4 + ESP32-C6), built on ESP-IDF with an LVGL UI.
 
 It signs in to the [Zello Channels API](https://github.com/zelloptt/zello-channel-api)
 over a WebSocket, joins one channel, and carries voice both ways as Opus through
-the board's own microphone and speaker — no extra hardware. Everything is configurable from the touch screen or from a browser.
+the board's own microphone and speaker — no extra hardware — along with the
+channel's text messages, which every board can read and send. Everything is configurable from the touch screen or from a browser.
 
 Board bring-up (display, touch, audio, power rails, Wi-Fi coprocessor) follows
 `camillia-mt` and `echolink-p4`, and the setup flow is deliberately the same
@@ -69,6 +71,24 @@ implemented; it has not yet been through a long soak test on hardware.
   boot log reports each channel's peak level.
 - The battery is read through the ADS1115 ADC; the LoRa radio and GNSS stay off.
 
+### Nicolai Electronics Tanmatsu
+
+- ESP32-P4 with 16 MB flash and 32 MB PSRAM, Wi-Fi on its ESP32-C6 over
+  ESP-Hosted. The board support is [badge-bsp](https://github.com/badgeteam/esp32-component-badge-bsp),
+  as in wadamesh; the C6 keeps the ESP-Hosted firmware the badge.team launcher
+  installed, and is power-cycled through the coprocessor at boot.
+- The 800x480 LCD (turned to landscape) and the full keyboard. Typing anywhere
+  on the home screen starts a channel message; **Enter** sends it. Arrows and
+  Tab move between controls, Esc goes back, and the volume keys set the volume.
+- **Listen and text only**: the Tanmatsu has no microphone, so the Talk button
+  reads *no microphone* and push-to-talk is ignored.
+- Audio is the ES8156 DAC into the speaker and the **headphone jack**. Plugging
+  in headphones mutes the speaker (the coprocessor switches the amplifier);
+  the volume control drives both.
+- Flashing this firmware **replaces the badge.team launcher** and its apps on
+  the internal flash. [recovery.tanmatsu.cloud](https://recovery.tanmatsu.cloud)
+  puts the launcher back.
+
 ## Building
 
 PlatformIO fetches and manages ESP-IDF itself; no separate install is needed.
@@ -77,6 +97,7 @@ PlatformIO fetches and manages ESP-IDF itself; no separate install is needed.
 ./scripts/build-upload-monitor.sh            # T-Display-P4: build, flash, then monitor
 ./scripts/build-upload-monitor.sh --tdeck    # T-Deck: build, flash, then monitor
 ./scripts/build-upload-monitor.sh --wio-tracker-l2   # Wio Tracker L2
+./scripts/build-upload-monitor.sh --tanmatsu # Tanmatsu (replaces the launcher)
 ./scripts/build-upload-monitor.sh -B         # compile only, no device needed
 ./scripts/build-upload-monitor.sh --port /dev/cu.usbmodem1101
 ./scripts/build-upload-monitor.sh -E         # erase flash first (wipes settings)
@@ -92,17 +113,18 @@ Host-side correctness regressions run with `python3 -m unittest discover -s test
 (Python 3, a C compiler, Node.js, and the ESP-IDF framework fetched by PlatformIO;
 no device is accessed).
 
-The T-Display-P4 is the default board; `--tdeck` selects the T-Deck and
-`--wio-tracker-l2` the Wio Tracker L2. Each board
+The T-Display-P4 is the default board; `--tdeck` selects the T-Deck,
+`--wio-tracker-l2` the Wio Tracker L2 and `--tanmatsu` the Tanmatsu. Each board
 builds into its own directory. Add `--fullclean` (`-F`) the first time you build
 a board, after switching boards, and after changing memory settings in the
 `sdkconfig.defaults*` files: PlatformIO otherwise keeps a stale generated linker
 script, and a P4 built that way boot-loops. The script says so when it applies.
 
-Settings shared by both boards are in `sdkconfig.defaults`; ESP-IDF layers
+Settings shared by every board are in `sdkconfig.defaults`; ESP-IDF layers
 `sdkconfig.defaults.esp32p4` or `sdkconfig.defaults.esp32s3` on top for the chip
-being built. The two ESP32-S3 boards are told apart by the "Board" choice in
-`main/Kconfig.projbuild`; the Wio build selects it in `sdkconfig.pio.wio.defaults`.
+being built. Boards on the same chip are told apart by the "Board" choice in
+`main/Kconfig.projbuild`; the Wio build selects it in `sdkconfig.pio.wio.defaults`
+and the Tanmatsu build in `sdkconfig.pio.tanmatsu.defaults`.
 
 The script runs `pio` against a separate core directory (`~/.platformio-p4`), so
 the pioarduino platform this project needs cannot be replaced by the
@@ -167,7 +189,13 @@ The home screen is also the talk screen:
   otherwise.
 - Channel activity — who joined, who is talking, text messages, errors — scrolls
   in the panel above the volume slider, and in the browser under *Channel
-  activity*, which can also send text messages.
+  activity*. An incoming text message also beeps.
+- **Text messages** go to the channel from the *Message the channel* field under the
+  activity panel: type, then **Send** (or Enter). On the touch-only boards
+  (T-Display-P4, Wio Tracker L2) tapping the field opens the on-screen keyboard,
+  which hides the talk controls until it closes; on the T-Deck and Tanmatsu just
+  start typing on the home screen (on the T-Deck a leading Space still talks). The browser's *Channel activity* can send
+  them too.
 
 ## Backup and restore
 

@@ -10,7 +10,7 @@
 
 static const char *TAG = "ptt";
 #if CONFIG_ZELLO_BOARD_TDECK
-#include "input_tdeck.h"
+#include "input_keys.h"
 #endif
 
 // Hold-to-talk on the board's button (BOOT on the P4, the trackball click on
@@ -20,6 +20,7 @@ static const char *TAG = "ptt";
 //
 // On the T-Deck the click also selects things, so it only talks while the
 // home screen is in front; leaving it counts as letting go.
+#ifdef BOARD_PTT_BUTTON
 static void ptt_task(void *arg)
 {
     bool pressed = false;
@@ -29,9 +30,9 @@ static void ptt_task(void *arg)
         bool now = gpio_get_level(BOARD_PTT_BUTTON) == 0;
 #if CONFIG_ZELLO_BOARD_TDECK
         static bool s_raw_was;
-        if (now && !s_raw_was && !input_tdeck_talk_active()) ESP_LOGI(TAG, "button ignored: not on the home screen");
+        if (now && !s_raw_was && !input_keys_talk_active()) ESP_LOGI(TAG, "button ignored: not on the home screen");
         s_raw_was = now;
-        if (!input_tdeck_talk_active()) now = false;
+        if (!input_keys_talk_active()) now = false;
 #endif
         if (now == pressed) {
             stable = 0;
@@ -49,9 +50,14 @@ static void ptt_task(void *arg)
         }
     }
 }
+#endif
 
 void ptt_button_start(void)
 {
+#ifndef BOARD_PTT_BUTTON
+    // No talk button (the Tanmatsu, which has no microphone either).
+    return;
+#else
     gpio_config_t io = {
         .pin_bit_mask = 1ULL << BOARD_PTT_BUTTON,
         .mode = GPIO_MODE_INPUT,
@@ -59,4 +65,5 @@ void ptt_button_start(void)
     };
     gpio_config(&io);
     xTaskCreate(ptt_task, "ptt", 2560, NULL, 10, NULL);
+#endif
 }

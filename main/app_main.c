@@ -2,8 +2,10 @@
 // coprocessor, voice through the ES8311 codec) and the LilyGO T-Deck (the
 // S3's own Wi-Fi, the ES7210 mic ADC and MAX98357A amplifier, keyboard and
 // trackball) and the Seeed Wio Tracker L2 (the S3's own Wi-Fi, ES8311 DAC and
-// ES7243E mic ADC, touch only): the Zello Channels API over a WebSocket, Opus voice, and an
-// LVGL touch UI backed by a browser-based config.
+// ES7243E mic ADC, touch only) and the Nicolai Electronics Tanmatsu (Wi-Fi
+// through its ESP32-C6, the ES8156 DAC to speaker or headphones, a keyboard,
+// no microphone): the Zello Channels API over a WebSocket, Opus voice, channel
+// text messages, and an LVGL UI backed by a browser-based config.
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -13,8 +15,8 @@
 #include "console_cmds.h"
 #include "crash_report.h"
 #include "display.h"
-#if CONFIG_ZELLO_BOARD_TDECK
-#include "input_tdeck.h"
+#if CONFIG_ZELLO_BOARD_TDECK || CONFIG_ZELLO_BOARD_TANMATSU
+#include "input_keys.h"
 #endif
 #include "net_wifi.h"
 #include "ptt.h"
@@ -35,8 +37,8 @@ void app_main(void)
     // still works without it.
     esp_err_t disp_err = display_init();
     if (disp_err != ESP_OK) ESP_LOGE(TAG, "display init failed: %s", esp_err_to_name(disp_err));
-#if CONFIG_ZELLO_BOARD_TDECK
-    if (disp_err == ESP_OK && input_tdeck_init() != ESP_OK) ESP_LOGE(TAG, "keyboard and trackball unavailable");
+#if CONFIG_ZELLO_BOARD_TDECK || CONFIG_ZELLO_BOARD_TANMATSU
+    if (disp_err == ESP_OK && input_keys_init() != ESP_OK) ESP_LOGE(TAG, "keyboard unavailable");
 #endif
     if (channel_list_init() != ESP_OK) ESP_LOGE(TAG, "channel list storage unavailable");
 

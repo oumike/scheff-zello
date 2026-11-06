@@ -25,7 +25,8 @@ static const char *TAG = "audio";
 // Playback and capture devices. On the P4 both are the one ES8311; on the
 // T-Deck the speaker amplifier and the ES7210 mic ADC are separate parts on
 // separate I2S ports; on the Wio Tracker L2 the ES8311 DAC and ES7243E ADC
-// share one I2S port.
+// share one I2S port. The Tanmatsu has no microphone: its BSP sets up the
+// ES8156 DAC, and playback goes straight to the BSP's I2S channel.
 static esp_codec_dev_handle_t s_out, s_in;
 static StreamBufferHandle_t s_play;
 static audio_mic_cb_t s_mic_cb;
@@ -33,7 +34,34 @@ static volatile bool s_playing;
 static volatile bool s_loopback;
 static volatile uint8_t s_mic_level, s_play_level;
 
-#if CONFIG_IDF_TARGET_ESP32P4
+#if CONFIG_ZELLO_BOARD_TANMATSU
+
+#include "bsp/audio.h"
+
+#define AUDIO_STEREO_IO 1
+#define AUDIO_NO_MIC    1
+
+static i2s_chan_handle_t s_tx;
+
+static esp_err_t codec_open(void)
+{
+    // bsp_device_initialize() configured the ES8156 and a stereo 44.1 kHz
+    // I2S channel; run it at the Opus rate instead. The clock can only change
+    // while the channel is stopped.
+    ESP_RETURN_ON_ERROR(bsp_audio_get_i2s_handle(&s_tx), TAG, "i2s handle");
+    ESP_RETURN_ON_FALSE(s_tx, ESP_ERR_INVALID_STATE, TAG, "no i2s channel");
+    i2s_channel_disable(s_tx);
+    esp_err_t err = bsp_audio_set_rate(AUDIO_RATE);
+    ESP_RETURN_ON_ERROR(i2s_channel_enable(s_tx), TAG, "i2s enable");
+    ESP_RETURN_ON_ERROR(err, TAG, "i2s rate");
+    // The DAC drives both the 3.5 mm jack and the speaker amplifier. The
+    // coprocessor mutes the amplifier while headphones are plugged in, as
+    // long as it isn't forced on.
+    bsp_audio_set_amplifier_force(false);
+    return ESP_OK;
+}
+
+#elif CONFIG_ZELLO_BOARD_TDISPLAY_P4
 
 static esp_err_t codec_open(void)
 {
@@ -305,6 +333,9 @@ static uint8_t peak_percent(const int16_t *pcm, size_t samples)
 #ifndef AUDIO_STEREO_IO
 #define AUDIO_STEREO_IO 0
 #endif
+#ifndef AUDIO_NO_MIC
+#define AUDIO_NO_MIC 0
+#endif
 
 #define FRAME_BYTES (AUDIO_FRAME * sizeof(int16_t))
 #define IO_BYTES    (FRAME_BYTES * (AUDIO_STEREO_IO ? 2 : 1))
@@ -313,7 +344,11 @@ static uint8_t peak_percent(const int16_t *pcm, size_t samples)
 // `io` is a scratch frame of IO_BYTES (unused on a mono link).
 static void out_write(int16_t *frame, int16_t *io)
 {
-#if AUDIO_STEREO_IO
+#if CONFIG_ZELLO_BOARD_TANMATSU
+    for (int i = 0; i < AUDIO_FRAME; i++) io[2 * i] = io[2 * i + 1] = frame[i];
+    size_t written;
+    i2s_channel_write(s_tx, io, IO_BYTES, &written, portMAX_DELAY);
+#elif AUDIO_STEREO_IO
     for (int i = 0; i < AUDIO_FRAME; i++) io[2 * i] = io[2 * i + 1] = frame[i];
     esp_codec_dev_write(s_out, io, IO_BYTES);
 #else
@@ -324,7 +359,9 @@ static void out_write(int16_t *frame, int16_t *io)
 // Reads one mono frame, taken from MIC_SLOT on a stereo link.
 static bool in_read(int16_t *frame, int16_t *io)
 {
-#if AUDIO_STEREO_IO
+#if AUDIO_NO_MIC
+    return false;
+#elif AUDIO_STEREO_IO
     if (esp_codec_dev_read(s_in, io, IO_BYTES) != ESP_CODEC_DEV_OK) return false;
     // The first ~3 s: each channel's loudest sample, for finding the mic.
     static int s_frames;
@@ -422,8 +459,9 @@ esp_err_t audio_init(audio_mic_cb_t mic_cb)
     ESP_RETURN_ON_ERROR(codec_open(), TAG, "codec");
 
     xTaskCreate(play_task, "audio_play", 4096, NULL, 20, NULL);
-    xTaskCreate(mic_task, "audio_mic", 4096, NULL, 19, NULL);
-    ESP_LOGI(TAG, "audio running at %d Hz mono, %d ms frames", AUDIO_RATE, AUDIO_FRAME_MS);
+    if (audio_has_mic()) xTaskCreate(mic_task, "audio_mic", 4096, NULL, 19, NULL);
+    ESP_LOGI(TAG, "audio running at %d Hz mono, %d ms frames%s", AUDIO_RATE, AUDIO_FRAME_MS,
+             audio_has_mic() ? "" : ", playback only");
     return ESP_OK;
 }
 
@@ -443,9 +481,20 @@ bool audio_is_playing(void)
     return s_playing;
 }
 
+bool audio_has_mic(void)
+{
+    return !AUDIO_NO_MIC;
+}
+
 void audio_set_volume(int percent)
 {
+#if CONFIG_ZELLO_BOARD_TANMATSU
+    // The ES8156's lower half is near silent: map 1..100 onto 50..100, as
+    // wadamesh does, so every step of the slider is audible.
+    bsp_audio_set_volume(percent <= 0 ? 0.0f : 50.0f + percent * 0.5f);
+#else
     if (s_out) esp_codec_dev_set_out_vol(s_out, percent);
+#endif
 }
 
 #define BEEP_HZ    880

@@ -16,7 +16,7 @@
 
 static const char *TAG = "display";
 
-#if CONFIG_IDF_TARGET_ESP32P4
+#if CONFIG_ZELLO_BOARD_TDISPLAY_P4
 
 #include "esp_lcd_mipi_dsi.h"
 #include "esp_ldo_regulator.h"
@@ -353,6 +353,74 @@ esp_err_t display_set_test_pattern(bool on)
 bool display_test_pattern(void)
 {
     return s_test_pattern;
+}
+
+#elif CONFIG_ZELLO_BOARD_TANMATSU
+
+#include "bsp/display.h"
+
+// badge-bsp has already brought up the ST7701 (480x800 portrait over
+// MIPI-DSI) in bsp_device_initialize(). LVGL draws an 800x480 landscape UI
+// and esp_lvgl_port turns each area to the panel's portrait in software, the
+// same 270 degree turn the BSP reports as the device's default and wadamesh
+// uses, so the keyboard sits below the screen.
+#define PANEL_H_RES        480
+#define PANEL_V_RES        800
+#define BRIGHTNESS_DEFAULT 180
+#define DRAW_BUF_LINES     16
+
+void display_set_brightness(uint8_t level)
+{
+    bsp_display_set_backlight_brightness((uint8_t)((level * 100 + 254) / 255));
+}
+
+esp_err_t display_init(void)
+{
+    esp_lcd_panel_handle_t panel = NULL;
+    esp_lcd_panel_io_handle_t io = NULL;
+    ESP_RETURN_ON_ERROR(bsp_display_get_panel(&panel), TAG, "bsp panel");
+    bsp_display_get_panel_io(&io);  // DPI panels have no command IO here; may stay NULL
+    display_set_brightness(0);
+
+    lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();
+    port_cfg.task_stack = 8192;
+    ESP_RETURN_ON_ERROR(lvgl_port_init(&port_cfg), TAG, "lvgl port");
+
+    const lvgl_port_display_cfg_t disp_cfg = {
+        .io_handle = io,
+        .panel_handle = panel,
+        .buffer_size = PANEL_V_RES * DRAW_BUF_LINES,
+        .double_buffer = true,
+        .hres = PANEL_H_RES,
+        .vres = PANEL_V_RES,
+        .color_format = LV_COLOR_FORMAT_RGB565,
+        .flags = {
+            .buff_dma = true,
+            .sw_rotate = true,
+        },
+    };
+    const lvgl_port_display_dsi_cfg_t dsi_cfg = {
+        .flags.avoid_tearing = false,
+    };
+    lv_display_t *disp = lvgl_port_add_disp_dsi(&disp_cfg, &dsi_cfg);
+    ESP_RETURN_ON_FALSE(disp, ESP_FAIL, TAG, "lvgl display");
+    lvgl_port_lock(0);
+    lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_270);
+    lvgl_port_unlock();
+
+    ESP_LOGI(TAG, "%dx%d LCD ready, %u bytes internal RAM free", DISPLAY_H_RES, DISPLAY_V_RES,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    return ESP_OK;
+}
+
+esp_err_t display_set_test_pattern(bool on)
+{
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+bool display_test_pattern(void)
+{
+    return false;
 }
 
 #elif CONFIG_ZELLO_BOARD_WIO_TRACKER_L2

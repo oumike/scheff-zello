@@ -24,6 +24,10 @@ void audio_play_push(const int16_t *pcm, size_t samples);
 void audio_play_flush(void);
 bool audio_is_playing(void);
 
+// False on boards without a microphone (the Tanmatsu): they listen and send
+// text, but can't talk.
+bool audio_has_mic(void);
+
 void audio_set_volume(int percent);
 // A short tone at the current volume, so a volume change can be heard.
 // Skipped while voice is playing.

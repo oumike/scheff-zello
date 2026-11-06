@@ -17,7 +17,8 @@ static const char *TAG = "sdcard";
 
 // Slot 0 uses the IO MUX pins 39-44 (CLK 43, CMD 44, D0-D3 39-42), whose IO
 // supply is the P4's on-chip LDO channel 4, as on Espressif's P4 boards and
-// in the Arduino SD_MMC setup camillia-mt uses on this board.
+// in the Arduino SD_MMC setup camillia-mt uses on the T-Display-P4. The
+// Tanmatsu wires its slot the same way.
 #define SD_LDO_CHAN 4
 
 static sd_pwr_ctrl_handle_t s_pwr;

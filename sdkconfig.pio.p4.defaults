@@ -1,4 +1,5 @@
-# Layered on sdkconfig.defaults by platformio.ini, T-Display-P4 builds only.
+# Layered on sdkconfig.defaults by platformio.ini, ESP32-P4 builds (the
+# T-Display-P4 and the Tanmatsu, whose early units carry the same silicon).
 
 # The T-Display P4 V1.0 carries ECO2 (pre rev 3.0) silicon, as in camillia-mt's
 # tdisplay_p4 board. pioarduino applies the board's esp32p4_es variant only to

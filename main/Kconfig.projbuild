@@ -2,17 +2,33 @@ menu "Zello Client"
 
     choice ZELLO_BOARD
         prompt "Board"
-        depends on IDF_TARGET_ESP32S3
+        default ZELLO_BOARD_TDISPLAY_P4 if IDF_TARGET_ESP32P4
         default ZELLO_BOARD_TDECK
         help
-            The ESP32-S3 board to build for. The ESP32-P4 build is always the
-            LilyGO T-Display-P4.
+            The board to build for: the T-Display-P4 or the Tanmatsu on the
+            ESP32-P4, the T-Deck or the Wio Tracker L2 on the ESP32-S3.
 
+        config ZELLO_BOARD_TDISPLAY_P4
+            bool "LilyGO T-Display-P4"
+            depends on IDF_TARGET_ESP32P4
+        config ZELLO_BOARD_TANMATSU
+            bool "Nicolai Electronics Tanmatsu"
+            depends on IDF_TARGET_ESP32P4
         config ZELLO_BOARD_TDECK
             bool "LilyGO T-Deck / T-Deck Plus"
+            depends on IDF_TARGET_ESP32S3
         config ZELLO_BOARD_WIO_TRACKER_L2
             bool "Seeed Wio Tracker L2"
+            depends on IDF_TARGET_ESP32S3
     endchoice
+
+    # 1 on the Tanmatsu, 0 elsewhere. The dependency rules in
+    # main/idf_component.yml test this rather than ZELLO_BOARD_TANMATSU: an
+    # int is written to sdkconfig on every target, a bool that is off isn't.
+    config ZELLO_USE_BADGE_BSP
+        int
+        default 1 if ZELLO_BOARD_TANMATSU
+        default 0
 
     choice ZELLO_NETWORK
         prompt "Zello network"

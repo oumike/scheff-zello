@@ -11,6 +11,7 @@
 #include "freertos/idf_additions.h"
 #include "cJSON.h"
 #include "esp_crt_bundle.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_websocket_client.h"
@@ -59,8 +60,11 @@ static const char *TAG = "zello";
 // How often the worker task re-checks those two timeouts.
 #define TICK_MS 250
 
-#define LOG_LINES    20
-#define LOG_LINE_MAX 96
+// A line holds a whole text message: a 64-character sender and up to 256
+// characters of text (what the web config sends), with room for UTF-8.
+#define LOG_LINES    24
+#define LOG_LINE_MAX 340
+_Static_assert(LOG_LINES * LOG_LINE_MAX <= ZELLO_LOG_MAX, "ZELLO_LOG_MAX too small");
 
 typedef struct {
     int16_t pcm[AUDIO_FRAME];
@@ -84,6 +88,7 @@ static zello_status_t s_status;
 static int s_seq = 1;
 static int s_logon_seq;
 static int s_stream_seq;
+static int s_text_seq;     // the last text message sent, to report a refusal
 static uint32_t s_tx_stream;   // stream we transmit on, 0 when none
 static uint32_t s_tx_packet;   // packet_id within it, counts from 1
 static uint32_t s_rx_stream;
@@ -94,7 +99,7 @@ static volatile bool s_want_connect;
 static volatile bool s_stop_requested;  // auth failure: the worker closes the socket
 static bool s_auto_connect_allowed = true;  // guarded by s_conn_lock
 
-static char s_log[LOG_LINES][LOG_LINE_MAX];
+static char (*s_log)[LOG_LINE_MAX];  // LOG_LINES lines, in PSRAM
 static size_t s_log_count;  // total lines ever added; the ring holds the last LOG_LINES
 
 // Reassembly of fragmented messages.
@@ -153,6 +158,7 @@ static void log_add(const char *fmt, ...)
 void zello_get_log(char *out, size_t size)
 {
     out[0] = 0;
+    if (!s_log) return;
     lock();
     size_t first = s_log_count > LOG_LINES ? s_log_count - LOG_LINES : 0;
     for (size_t i = first; i < s_log_count; i++) {
@@ -297,7 +303,7 @@ esp_err_t zello_send_text(const char *text)
     cJSON_AddStringToObject(root, "command", "send_text_message");
     cJSON_AddStringToObject(root, "channel", g_settings.channel);
     cJSON_AddStringToObject(root, "text", text);
-    bool ok = send_command(root, next_seq(NULL));
+    bool ok = send_command(root, next_seq(&s_text_seq));
     if (ok) log_add("You: %s", text);
     return ok ? ESP_OK : ESP_FAIL;
 }
@@ -307,6 +313,10 @@ esp_err_t zello_send_text(const char *text)
 void zello_set_ptt(bool on)
 {
     if (on) {
+        if (!audio_has_mic()) {
+            ESP_LOGW(TAG, "talk ignored: this board has no microphone");
+            return;
+        }
         if (zello_state() != ZELLO_ONLINE) {
             ESP_LOGW(TAG, "talk ignored: not signed in to a channel");
             return;
@@ -477,7 +487,13 @@ static void handle_response(int seq, cJSON *j)
     lock();
     bool is_logon = seq == s_logon_seq;
     bool is_stream = seq == s_stream_seq;
+    bool is_text = seq == s_text_seq;
     unlock();
+
+    if (is_text) {
+        if (!success) log_add("Message not sent: %s", error[0] ? error : "the channel refused it");
+        return;
+    }
 
     if (is_logon) {
         if (success) {
@@ -580,6 +596,8 @@ static void handle_event(const char *command, cJSON *j)
         const char *from = json_str(j, "from");
         const char *text = json_str(j, "text");
         log_add("%s: %s", from[0] ? from : "?", text);
+        // A text arrives silently otherwise; voice already announces itself.
+        audio_beep();
         return;
     }
 
@@ -780,7 +798,9 @@ esp_err_t zello_init(void)
     s_rx_q = xQueueCreate(RX_QUEUE_DEPTH, sizeof(rx_packet_t));
 #endif
     s_asm = malloc(MESSAGE_MAX);
-    if (!s_lock || !s_conn_lock || !s_send_lock || !s_tx_q || !s_rx_q || !s_asm) return ESP_ERR_NO_MEM;
+    s_log = heap_caps_calloc(LOG_LINES, LOG_LINE_MAX, MALLOC_CAP_SPIRAM);
+    if (!s_log) s_log = calloc(LOG_LINES, LOG_LINE_MAX);
+    if (!s_lock || !s_conn_lock || !s_send_lock || !s_tx_q || !s_rx_q || !s_asm || !s_log) return ESP_ERR_NO_MEM;
 
     esp_err_t err = opus_codec_init();
     if (err != ESP_OK) return err;

@@ -11,10 +11,14 @@
 #include "esp_mac.h"
 #include "esp_check.h"
 #include "esp_event.h"
-#if CONFIG_IDF_TARGET_ESP32P4
+#if CONFIG_ZELLO_BOARD_TDISPLAY_P4
 #include "esp_hosted.h"
 #include "esp_hosted_transport_config.h"
 #include "board.h"
+#elif CONFIG_ZELLO_BOARD_TANMATSU
+#include "freertos/task.h"
+#include "esp_hosted.h"
+#include "bsp/power.h"
 #endif
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -52,10 +56,31 @@ static bool reason_is_not_found(uint8_t r)
            r == WIFI_REASON_NO_AP_FOUND_IN_AUTHMODE_THRESHOLD || r == WIFI_REASON_NO_AP_FOUND_IN_RSSI_THRESHOLD;
 }
 
-#if CONFIG_IDF_TARGET_ESP32P4
+#if CONFIG_ZELLO_BOARD_TDISPLAY_P4
 static esp_err_t c6_reset_cb(void *arg, bool level)
 {
     return board_c6_enable(level);
+}
+#elif CONFIG_ZELLO_BOARD_TANMATSU
+
+#define C6_CONNECT_TRIES 4
+
+// The Tanmatsu's C6 has no reset GPIO: its power is the coprocessor's to
+// switch. ESP-Hosted calls this when it needs the slave reset
+// (CONFIG_ESP_HOSTED_RESET_SLAVE_USING_CALLBACK), as nicolaielectronics/tanmatsu-wifi does.
+static void c6_power_cycle(uint32_t off_ms, uint32_t boot_ms)
+{
+    bsp_power_set_radio_state(BSP_POWER_RADIO_STATE_OFF);
+    vTaskDelay(pdMS_TO_TICKS(off_ms));
+    bsp_power_set_radio_state(BSP_POWER_RADIO_STATE_APPLICATION);
+    vTaskDelay(pdMS_TO_TICKS(boot_ms));
+}
+
+int hosted_reset_slave_callback(void)
+{
+    ESP_LOGW(TAG, "power cycling the C6 radio");
+    c6_power_cycle(500, 1200);
+    return 0;
 }
 #endif
 
@@ -93,13 +118,28 @@ esp_err_t net_wifi_init(void)
     s_events = xEventGroupCreate();
     s_join_lock = xSemaphoreCreateMutex();
 
-#if CONFIG_IDF_TARGET_ESP32P4
-    // The P4 reaches Wi-Fi through the C6 coprocessor over ESP-Hosted. The S3
+#if CONFIG_ZELLO_BOARD_TDISPLAY_P4
+    // The P4 boards reach Wi-Fi through a C6 coprocessor over ESP-Hosted. The S3
     // has its own radio, and esp_wifi_init() below is all it needs.
     ESP_RETURN_ON_FALSE(esp_hosted_sdio_set_reset_callback(c6_reset_cb, NULL) == ESP_TRANSPORT_OK,
                         ESP_FAIL, TAG, "hosted reset cb");
     ESP_RETURN_ON_ERROR(board_c6_enable(true), TAG, "c6 power");
     ESP_RETURN_ON_ERROR(esp_hosted_init(), TAG, "esp_hosted_init");
+#elif CONFIG_ZELLO_BOARD_TANMATSU
+    // ESP-Hosted starts itself before app_main, before the coprocessor that
+    // powers the C6 is up. Start the C6 afresh, as wadamesh does: one left
+    // running by the previous app (or the launcher) otherwise won't answer.
+    c6_power_cycle(150, 600);
+    ESP_RETURN_ON_ERROR(esp_hosted_init(), TAG, "esp_hosted_init");
+    int rc = -1;
+    for (int i = 0; i < C6_CONNECT_TRIES && rc != 0; i++) {
+        rc = esp_hosted_connect_to_slave();
+        if (rc != 0) {
+            ESP_LOGW(TAG, "C6 connect try %d failed (%d)", i + 1, rc);
+            vTaskDelay(pdMS_TO_TICKS(250));
+        }
+    }
+    ESP_RETURN_ON_FALSE(rc == 0, ESP_FAIL, TAG, "no link to the C6 radio");
 #endif
 
     ESP_RETURN_ON_ERROR(esp_netif_init(), TAG, "netif");

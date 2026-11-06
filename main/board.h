@@ -1,6 +1,6 @@
 #pragma once
 
-// Board support for the three targets:
+// Board support for the four targets:
 //  - LilyGO T-Display-P4 V1.0 (ESP32-P4): the two I2C buses, the XL9535 I/O
 //    expander rails that gate audio / Wi-Fi / SD / display power, and the fuel
 //    gauge.
@@ -10,7 +10,10 @@
 //  - Seeed Wio Tracker L2 (ESP32-S3): the PCA9555 I/O expander that holds the
 //    LCD, touch, audio amplifier and microSD power and reset lines, the shared
 //    I2C bus, the LCD's QSPI bus, and the ADS1115 battery ADC.
-// The two ESP32-S3 boards are told apart by CONFIG_ZELLO_BOARD_* (Kconfig).
+//  - Nicolai Electronics Tanmatsu (ESP32-P4): everything through badge.team's
+//    badge-bsp, which drives the CH32V203 coprocessor (keyboard, backlight,
+//    power, the C6 radio's power, the speaker amplifier) and the ES8156 DAC.
+// The boards are told apart by CONFIG_ZELLO_BOARD_* (Kconfig).
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -18,7 +21,7 @@
 #include "esp_err.h"
 #include "driver/i2c_master.h"
 
-#if CONFIG_IDF_TARGET_ESP32P4
+#if CONFIG_ZELLO_BOARD_TDISPLAY_P4
 
 // I2C bus 1: XL9535 I/O expander, touch, RTC, fuel gauge.
 #define BOARD_I2C1_SDA 7
@@ -39,6 +42,15 @@
 // it as PTT if Ethernet is ever enabled.
 #define BOARD_BOOT_BUTTON 35
 #define BOARD_PTT_BUTTON  BOARD_BOOT_BUTTON
+
+#elif CONFIG_ZELLO_BOARD_TANMATSU
+
+// Most of the hardware is reached through badge-bsp; these are only the pins
+// the BSP leaves to us. No talk button (and no microphone): BOARD_PTT_BUTTON
+// stays undefined.
+
+// microSD on SDMMC slot 0 in 4-bit mode (IO MUX pins CLK 43, CMD 44, D0-D3
+// 39-42), powered by the P4's on-chip LDO channel 4.
 
 #elif CONFIG_ZELLO_BOARD_WIO_TRACKER_L2
 
@@ -153,21 +165,22 @@ spi_host_device_t board_spi_host(void);
 
 esp_err_t board_init(void);
 
-// Audio power. On the P4, the shared OUT_5V domain (NS4150B speaker amp and
-// the ES8311 analog supply); on the Wio Tracker L2 the speaker amplifier; on
-// the T-Deck audio is always powered.
+// Audio power. On the T-Display-P4, the shared OUT_5V domain (NS4150B speaker
+// amp and the ES8311 analog supply); on the Wio Tracker L2 and the Tanmatsu
+// the speaker amplifier; on the T-Deck audio is always powered.
 esp_err_t board_audio_power(bool on);
 
-// Reads the battery state of charge (0-100%): the BQ27220 gauge on the P4, an
-// estimate from the cell voltage on the ESP32-S3 boards.
+// Reads the battery state of charge (0-100%): the BQ27220 gauge on the
+// T-Display-P4, the coprocessor's estimate on the Tanmatsu, an estimate from
+// the cell voltage on the ESP32-S3 boards.
 esp_err_t board_battery_percent(uint8_t *percent);
 
-// The P4's two buses (expander and touch; codec). On the ESP32-S3 boards both
-// return the one shared bus.
+// The T-Display-P4's two buses (expander and touch; codec). On the other
+// boards both return the one shared bus.
 i2c_master_bus_handle_t board_main_i2c_bus(void);
 i2c_master_bus_handle_t board_codec_i2c_bus(void);
 
-#if CONFIG_IDF_TARGET_ESP32P4
+#if CONFIG_ZELLO_BOARD_TDISPLAY_P4
 
 // ESP32-C6 coprocessor EN line (active high).
 esp_err_t board_c6_enable(bool on);
@@ -179,5 +192,11 @@ esp_err_t board_sd_power(bool on);
 // in reset, true releases it.
 esp_err_t board_screen_reset_release(bool released);
 esp_err_t board_touch_reset_release(bool released);
+
+#elif CONFIG_ZELLO_BOARD_TANMATSU
+
+// The SD card has no switched supply; this is a no-op kept so sdcard.c can
+// treat both P4 boards alike.
+esp_err_t board_sd_power(bool on);
 
 #endif

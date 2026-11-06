@@ -16,10 +16,11 @@ FULLCLEAN=false
 JUST_BUILD=false
 
 show_usage() {
-	echo "Usage: $0 [--tdisplay-p4|--tdeck|--wio-tracker-l2] [--port PORT] [--erase|-E] [--fullclean|-F] [--just-build|-B]"
+	echo "Usage: $0 [--tdisplay-p4|--tdeck|--wio-tracker-l2|--tanmatsu] [--port PORT] [--erase|-E] [--fullclean|-F] [--just-build|-B]"
 	echo "  --tdisplay-p4 Build for the LilyGO T-Display-P4 (the default)."
 	echo "  --tdeck       Build for the LilyGO T-Deck or T-Deck Plus."
 	echo "  --wio-tracker-l2  Build for the Seeed Wio Tracker L2."
+	echo "  --tanmatsu    Build for the Nicolai Electronics Tanmatsu (replaces its launcher)."
 	echo "  --port PORT   Serial port of the selected device (e.g. /dev/cu.usbmodem1101)."
 	echo "                If omitted, PlatformIO auto-detects the port."
 	echo "  --erase, -E   Erase flash before build/upload. This wipes NVS, so the"
@@ -111,6 +112,9 @@ while [ $# -gt 0 ]; do
 			;;
 		--wio-tracker-l2)
 			ENV_NAME="wio-tracker-l2"
+			;;
+		--tanmatsu)
+			ENV_NAME="tanmatsu"
 			;;
 		--port)
 			if [ $# -lt 2 ]; then

@@ -20,6 +20,7 @@ dependencies:
     version: ">=1.6.1,<2.0"
     rules:
       - if: "target in [esp32p4]"
+      - if: "$CONFIG{ZELLO_USE_BADGE_BSP} == 0"
 
   # LilyGO's ESP-Hosted fork adds esp_hosted_sdio_set_reset_callback(), which we
   # need because the C6 EN line sits on the XL9535 I/O expander, not a GPIO. It
@@ -30,3 +31,17 @@ dependencies:
     override_path: "../third_party/esp_hosted"
     rules:
       - if: "target in [esp32p4]"
+      - if: "$CONFIG{ZELLO_USE_BADGE_BSP} == 0"
+
+  # Nicolai Electronics Tanmatsu: badge-bsp drives the display, keyboard
+  # (through the CH32 coprocessor), power, radio power and the ES8156 DAC.
+  # Wi-Fi rides the Tanmatsu's own ESP-Hosted fork, matching the slave
+  # firmware the badge.team launcher keeps on its C6.
+  badgeteam/badge-bsp:
+    version: "^0.9.9"
+    rules:
+      - if: "$CONFIG{ZELLO_USE_BADGE_BSP} == 1"
+  nicolaielectronics/esp-wifi-remote-tanmatsu:
+    version: "^1.4.2"
+    rules:
+      - if: "$CONFIG{ZELLO_USE_BADGE_BSP} == 1"
