@@ -1,9 +1,13 @@
 #include "web_config.h"
 
 #include <ctype.h>
+#include <dirent.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
+#include <sys/stat.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "cJSON.h"
@@ -774,119 +778,141 @@ static esp_err_t h_export_download(httpd_req_t *req)
     return err == ESP_OK ? httpd_resp_send_chunk(req, NULL, 0) : err;
 }
 
-static esp_err_t import_result(httpd_req_t *req, size_t count, const char *what, bool has_settings,
-                               bool has_channels, bool wifi_changed, bool reconnecting)
+// What an import did, or why it failed (nothing changed, unless `fail` says
+// otherwise). `status` is the HTTP status for a failure.
+typedef struct {
+    const char *fail;
+    const char *status;
+    char msg[96];
+    size_t count;
+    bool has_settings, channels_replaced, wifi_changed, reconnecting;
+} import_outcome_t;
+
+static void import_failed(import_outcome_t *o, const char *status, const char *fail)
 {
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddNumberToObject(root, "count", count);
-    cJSON_AddStringToObject(root, "from", what);
-    cJSON_AddBoolToObject(root, "settings", has_settings);
-    cJSON_AddBoolToObject(root, "channels", has_channels);
-    cJSON_AddBoolToObject(root, "wifi_changed", wifi_changed);
-    cJSON_AddBoolToObject(root, "reconnecting", reconnecting);
-    return send_json(req, root);
+    o->status = status;
+    o->fail = fail;
 }
 
-static esp_err_t import_yaml(httpd_req_t *req, const char *text, const char *what)
+static void import_yaml(const char *text, import_outcome_t *o)
 {
     yaml_backup_t *b = heap_caps_calloc(1, sizeof(*b), MALLOC_CAP_SPIRAM);
     channel_entry_t *list = heap_caps_malloc(CHANNEL_LIST_MAX * sizeof(*list), MALLOC_CAP_SPIRAM);
     if (!b || !list) {
         free(b);
         free(list);
-        return httpd_resp_send_500(req);
+        import_failed(o, "500 Internal Server Error", "Not enough memory for the import; nothing was changed.");
+        return;
     }
     b->settings = g_settings;
     b->channels = list;
 
     int line = 0;
     esp_err_t err = yaml_parse(text, backup_yaml_value, b, &line);
-    char msg[96];
-    const char *fail = NULL, *status = "400 Bad Request";
     if (err == ESP_ERR_INVALID_VERSION) {
-        fail = "This backup is from a newer version; nothing was changed.";
+        import_failed(o, "400 Bad Request", "This backup is from a newer version; nothing was changed.");
     } else if (err == ESP_ERR_INVALID_ARG) {
-        snprintf(msg, sizeof(msg), "Line %d of the backup isn't valid; nothing was changed.", line);
-        fail = msg;
+        snprintf(o->msg, sizeof(o->msg), "Line %d of the backup isn't valid; nothing was changed.", line);
+        import_failed(o, "400 Bad Request", o->msg);
     } else if (err != ESP_OK) {
-        fail = "Import failed; nothing was changed.";
-        status = "500 Internal Server Error";
+        import_failed(o, "500 Internal Server Error", "Import failed; nothing was changed.");
     } else if (!b->has_settings && !b->has_channels) {
-        fail = "That file has no settings or channels; nothing was changed.";
+        import_failed(o, "400 Bad Request", "That file has no settings or channels; nothing was changed.");
     }
 
     // An empty list in the file leaves the device's list alone rather than
     // wiping it.
-    size_t count = channel_list_count();
-    bool channels_replaced = false;
-    if (!fail && b->count) {
-        err = channel_list_replace(b->channels, b->count, &count);
+    o->count = channel_list_count();
+    if (!o->fail && b->count) {
+        err = channel_list_replace(b->channels, b->count, &o->count);
         if (err == ESP_OK) {
-            channels_replaced = true;
+            o->channels_replaced = true;
         } else if (err != ESP_ERR_NOT_FOUND) {
-            fail = "Import failed; nothing was changed.";
-            status = "500 Internal Server Error";
+            import_failed(o, "500 Internal Server Error", "Import failed; nothing was changed.");
         }
     }
 
-    bool wifi_changed = false, reconnecting = false;
-    if (!fail && b->has_settings && backup_apply_settings(&b->settings, &wifi_changed, &reconnecting) != ESP_OK) {
-        fail = channels_replaced ? "The channel list was restored, but the settings could not be saved."
-                                 : "The settings could not be saved.";
-        status = "500 Internal Server Error";
+    if (!o->fail && b->has_settings &&
+        backup_apply_settings(&b->settings, &o->wifi_changed, &o->reconnecting) != ESP_OK) {
+        import_failed(o, "500 Internal Server Error",
+                      o->channels_replaced ? "The channel list was restored, but the settings could not be saved."
+                                           : "The settings could not be saved.");
     }
-    bool has_settings = b->has_settings;
+    o->has_settings = b->has_settings;
     memset(b, 0, sizeof(*b));  // it held the passwords and the token
     free(b);
     free(list);
-    if (fail) return send_error(req, status, fail);
-    return import_result(req, count, what, has_settings, channels_replaced, wifi_changed, reconnecting);
 }
 
-// A backup is YAML now; one that starts with '<' is an XML backup from before.
-static esp_err_t import_backup(httpd_req_t *req, const char *text, const char *what)
+static void import_xml(const char *xml, import_outcome_t *o)
 {
+    if (xml_validate_document(xml) != ESP_OK) {
+        import_failed(o, "400 Bad Request", "The XML backup is malformed; nothing was changed.");
+        return;
+    }
+    settings_t restored;
+    esp_err_t err = backup_parse_settings_xml(xml, &restored, &o->has_settings);
+    if (err == ESP_ERR_INVALID_VERSION) {
+        import_failed(o, "400 Bad Request", "This backup uses an unsupported settings version.");
+        return;
+    }
+    if (err != ESP_OK) {
+        import_failed(o, "400 Bad Request", "The backup settings are incomplete or invalid; nothing was changed.");
+        return;
+    }
+
+    o->count = channel_list_count();
+    err = channel_list_import_buffer(xml, &o->count);
+    o->channels_replaced = err == ESP_OK;
+    if (err == ESP_ERR_NOT_FOUND && !o->has_settings) {
+        import_failed(o, "400 Bad Request", "That file has no <channel> entries; nothing was changed.");
+        return;
+    }
+    if (err != ESP_OK && err != ESP_ERR_NOT_FOUND) {
+        import_failed(o, err == ESP_ERR_INVALID_ARG ? "400 Bad Request" : "500 Internal Server Error",
+                      "Import failed; nothing was changed.");
+        return;
+    }
+    if (!o->channels_replaced) o->count = channel_list_count();
+
+    if (o->has_settings && backup_apply_settings(&restored, &o->wifi_changed, &o->reconnecting) != ESP_OK) {
+        import_failed(o, "500 Internal Server Error",
+                      o->channels_replaced ? "The channel list was restored, but the settings could not be saved."
+                                           : "The settings could not be saved.");
+    }
+}
+
+// One import at a time, whether from the page or the device's own prompt.
+static atomic_flag s_importing = ATOMIC_FLAG_INIT;
+
+// A backup is YAML now; one that starts with '<' is an XML backup from before.
+static void import_backup(const char *text, import_outcome_t *o)
+{
+    memset(o, 0, sizeof(*o));
+    if (atomic_flag_test_and_set(&s_importing)) {
+        import_failed(o, "409 Conflict", "Another import is running; nothing was changed.");
+        return;
+    }
     const char *p = text;
     while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
     if (!strncmp(p, "\xEF\xBB\xBF", 3)) p += 3;
     while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
-    if (*p != '<') return import_yaml(req, text, what);
+    if (*p == '<') import_xml(text, o);
+    else import_yaml(text, o);
+    atomic_flag_clear(&s_importing);
+}
 
-    const char *xml = text;
-    if (xml_validate_document(xml) != ESP_OK) {
-        return send_error(req, "400 Bad Request", "The XML backup is malformed; nothing was changed.");
-    }
-    settings_t restored;
-    bool has_settings;
-    esp_err_t err = backup_parse_settings_xml(xml, &restored, &has_settings);
-    if (err == ESP_ERR_INVALID_VERSION) {
-        return send_error(req, "400 Bad Request", "This backup uses an unsupported settings version.");
-    }
-    if (err != ESP_OK) {
-        return send_error(req, "400 Bad Request",
-                          "The backup settings are incomplete or invalid; nothing was changed.");
-    }
-
-    size_t count = channel_list_count();
-    err = channel_list_import_buffer(xml, &count);
-    bool channels_replaced = err == ESP_OK;
-    if (err == ESP_ERR_NOT_FOUND && !has_settings) {
-        return send_error(req, "400 Bad Request", "That file has no <channel> entries; nothing was changed.");
-    }
-    if (err != ESP_OK && err != ESP_ERR_NOT_FOUND) {
-        return send_error(req, err == ESP_ERR_INVALID_ARG ? "400 Bad Request" : "500 Internal Server Error",
-                          "Import failed; nothing was changed.");
-    }
-    if (!channels_replaced) count = channel_list_count();
-
-    bool wifi_changed = false, reconnecting = false;
-    if (has_settings && backup_apply_settings(&restored, &wifi_changed, &reconnecting) != ESP_OK) {
-        return send_error(req, "500 Internal Server Error",
-                          channels_replaced ? "The channel list was restored, but the settings could not be saved."
-                                            : "The settings could not be saved.");
-    }
-
-    return import_result(req, count, what, has_settings, channels_replaced, wifi_changed, reconnecting);
+static esp_err_t send_import(httpd_req_t *req, const import_outcome_t *o, const char *what)
+{
+    if (o->fail) return send_error(req, o->status, o->fail);
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "count", o->count);
+    cJSON_AddStringToObject(root, "from", what);
+    cJSON_AddBoolToObject(root, "settings", o->has_settings);
+    cJSON_AddBoolToObject(root, "channels", o->channels_replaced);
+    cJSON_AddBoolToObject(root, "wifi_changed", o->wifi_changed);
+    cJSON_AddBoolToObject(root, "reconnecting", o->reconnecting);
+    return send_json(req, root);
 }
 
 // POST /api/import: the body is a complete backup, or just a channel list.
@@ -902,10 +928,11 @@ static esp_err_t h_import_upload(httpd_req_t *req)
     if (err != ESP_OK) {
         return reject_request(req, "400 Bad Request", "The upload is incomplete or contains a NUL byte.");
     }
-    err = import_backup(req, buf, "upload");
+    import_outcome_t o;
+    import_backup(buf, &o);
     memset(buf, 0, req->content_len);  // the backup carries the passwords and the token
     free(buf);
-    return err;
+    return send_import(req, &o, "upload");
 }
 
 static esp_err_t sd_error(httpd_req_t *req)
@@ -991,10 +1018,89 @@ static esp_err_t h_sd_import(httpd_req_t *req)
     if (err == ESP_ERR_INVALID_SIZE) return send_error(req, "400 Bad Request", "That file is empty or too large.");
     if (err == ESP_ERR_INVALID_ARG) return send_error(req, "400 Bad Request", "The backup contains a NUL byte.");
     if (err != ESP_OK) return send_error(req, "500 Internal Server Error", "Couldn't read the SD card backup.");
-    err = import_backup(req, text, "sd");
+    import_outcome_t o;
+    import_backup(text, &o);
     memset(text, 0, strlen(text));
     free(text);
-    return err;
+    return send_import(req, &o, "sd");
+}
+
+// ---- the onboarding prompt -------------------------------------------------
+
+static bool backup_name_ok(const char *name)
+{
+    static const struct {
+        const char *prefix, *suffix;
+    } kinds[] = {
+        {"scheff-zello-backup", ".yaml"},
+        {"scheff-zello-backup", ".yml"},
+        {"zello-p4-backup", ".xml"},
+    };
+    size_t len = strlen(name);
+    for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++) {
+        size_t p = strlen(kinds[i].prefix), x = strlen(kinds[i].suffix);
+        if (len >= p + x && !strncasecmp(name, kinds[i].prefix, p) && !strcasecmp(name + len - x, kinds[i].suffix)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool web_config_sd_backup_find(char *name, size_t size, time_t *mtime)
+{
+    name[0] = 0;
+    *mtime = 0;
+    if (sdcard_mount() != ESP_OK) return false;
+    // An export the power cut short leaves only its .tmp; finish it first.
+    file_store_recover(SD_BACKUP_PATH);
+    DIR *dir = opendir(SDCARD_MOUNT);
+    if (!dir) return false;
+    bool found = false;
+    struct dirent *e;
+    while ((e = readdir(dir))) {
+        if (!backup_name_ok(e->d_name)) continue;
+        char path[300];
+        struct stat st;
+        snprintf(path, sizeof(path), SDCARD_MOUNT "/%s", e->d_name);
+        if (stat(path, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= 0) continue;
+        if (!found || st.st_mtime > *mtime) {
+            found = true;
+            *mtime = st.st_mtime;
+            strlcpy(name, e->d_name, size);
+        }
+    }
+    closedir(dir);
+    return found;
+}
+
+esp_err_t web_config_sd_backup_import(const char *name, char *msg, size_t size)
+{
+    char path[300];
+    snprintf(path, sizeof(path), SDCARD_MOUNT "/%s", name);
+    char *text = NULL;
+    esp_err_t err = sdcard_mount();
+    if (err == ESP_OK) err = backup_read_file(path, &text);
+    if (err != ESP_OK) {
+        snprintf(msg, size, "Couldn't read %s from the SD card.", name);
+        return err;
+    }
+    import_outcome_t o;
+    import_backup(text, &o);
+    memset(text, 0, strlen(text));
+    free(text);
+    if (o.fail) {
+        strlcpy(msg, o.fail, size);
+        return ESP_FAIL;
+    }
+    if (o.channels_replaced && o.has_settings) {
+        snprintf(msg, size, "Restored the settings and %u channel%s.", (unsigned)o.count, o.count == 1 ? "" : "s");
+    } else if (o.channels_replaced) {
+        snprintf(msg, size, "Restored %u channel%s.", (unsigned)o.count, o.count == 1 ? "" : "s");
+    } else {
+        strlcpy(msg, "Restored the settings.", size);
+    }
+    ESP_LOGI(TAG, "onboarding import of %s: %s", name, msg);
+    return ESP_OK;
 }
 
 // ---- crash reports ---------------------------------------------------------

@@ -336,7 +336,7 @@ static int test_settings_xml(bool empty_channels)
     snprintf(xml, sizeof(xml), "<zello-backup>%s%s</zello-backup>", settings_xml,
              empty_channels ? "<channels/>" : "");
     httpd_req_t req = json_request("");
-    import_backup(&req, xml, "test");
+    { import_outcome_t o; import_backup(xml, &o); send_import(&req, &o, "test"); }
     CHECK(strncmp(req.status, "200", 3) == 0);
     CHECK(g_settings.volume == 61 && strcmp(g_settings.username, "restored-user") == 0);
     CHECK(saved_count == 1 && strcmp(saved[0].name, "Keep") == 0);
@@ -354,7 +354,7 @@ static int test_malformed_xml(void)
     snprintf(xml, sizeof(xml), "<zello-backup>%s<channel name=\"New\"/></zello-backup>garbage",
              settings_xml);
     httpd_req_t req = json_request("");
-    import_backup(&req, xml, "test");
+    { import_outcome_t o; import_backup(xml, &o); send_import(&req, &o, "test"); }
     CHECK(strncmp(req.status, "400", 3) == 0);
     CHECK(settings_writes == 0 && g_settings.volume == 40);
     CHECK(saved_count == 1 && strcmp(saved[0].name, "Keep") == 0);
@@ -368,7 +368,7 @@ static int test_xml_quoted_settings(void)
     char *username = strstr(xml, "restored-user");
     memcpy(username, "user>network1", 13);
     httpd_req_t req = json_request("");
-    import_backup(&req, xml, "test");
+    { import_outcome_t o; import_backup(xml, &o); send_import(&req, &o, "test"); }
     CHECK(strncmp(req.status, "200", 3) == 0);
     CHECK(strcmp(g_settings.username, "user>network1") == 0);
     CHECK(saved_count == 1 && strcmp(saved[0].name, "Keep") == 0);

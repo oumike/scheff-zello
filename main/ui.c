@@ -1,6 +1,7 @@
 #include "ui.h"
 
 #include <stdlib.h>
+#include <time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -10,6 +11,7 @@
 #include "onboard.h"
 #include "settings.h"
 #include "ui_internal.h"
+#include "web_config.h"
 #include "zello_client.h"
 
 static const char *TAG = "ui";
@@ -512,6 +514,46 @@ static void onboard_changed(void)
     display_unlock();
 }
 
+// A device that isn't set up yet offers the newest backup on the SD card, once
+// per boot: after an erase that is everything back in one tap.
+static char s_backup_name[96];
+
+static void backup_import_task(void *arg)
+{
+    char msg[128];
+    esp_err_t err = web_config_sd_backup_import(s_backup_name, msg, sizeof(msg));
+    if (!display_lock()) return;
+    ui_modal_message(msg, err == ESP_OK ? UI_COLOR_GO_LIT : UI_COLOR_STOP, true, NULL);
+    display_unlock();
+}
+
+static void backup_chosen(int index)
+{
+    ui_modal_busy("Importing the backup...");
+    ui_run_async("backup_import", backup_import_task, NULL);
+}
+
+static void backup_scan_task(void *arg)
+{
+    time_t mtime;
+    if (!web_config_sd_backup_find(s_backup_name, sizeof(s_backup_name), &mtime)) return;
+
+    static char title[200];
+    struct tm tm;
+    char when[40] = "";
+    // FAT keeps the time the device's clock said; before SNTP that's 1980.
+    if (mtime > 1577836800 && localtime_r(&mtime, &tm)) strftime(when, sizeof(when), "\nsaved %Y-%m-%d %H:%M", &tm);
+    snprintf(title, sizeof(title), "Restore from the SD card?\n%s%s", s_backup_name, when);
+    ESP_LOGI(TAG, "offering backup %s", s_backup_name);
+
+    static const char *const items[] = {"Import backup"};
+    const lv_color_t colors[] = {UI_COLOR_ACCENT};
+    if (!display_lock()) return;
+    // Someone may have finished setting up from the browser meanwhile.
+    if (!onboard_complete()) ui_modal_menu(title, items, colors, 1, backup_chosen);
+    display_unlock();
+}
+
 void ui_start(void)
 {
     display_lock();
@@ -519,4 +561,5 @@ void ui_start(void)
     show_stage();
     ui_saver_init();
     display_unlock();
+    if (!onboard_complete()) ui_run_async("backup_scan", backup_scan_task, NULL);
 }
