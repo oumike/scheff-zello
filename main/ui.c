@@ -274,11 +274,24 @@ lv_obj_t *ui_field(lv_obj_t *parent, const char *label, const char *placeholder,
     lv_obj_t *ta = lv_textarea_create(parent);
     lv_textarea_set_one_line(ta, true);
     lv_textarea_set_placeholder_text(ta, placeholder);
-    lv_obj_set_size(ta, LV_PCT(100), UI_FIELD_H);
+    lv_obj_set_width(ta, LV_PCT(100));
     lv_obj_set_style_text_font(ta, UI_FONT, 0);
     lv_obj_set_style_radius(ta, UI_RADIUS, 0);
+    ui_field_fit(ta, UI_FIELD_H);
     if (kb) ui_field_attach_keyboard(ta, kb);
     return ta;
+}
+
+// The theme pads a text field by screen DPI, which on the 320x240 boards is
+// more than the field has room for: the line then overflows, and the text and
+// cursor sit below the box and jump about as it scrolls.
+void ui_field_fit(lv_obj_t *ta, int32_t h)
+{
+    lv_obj_set_height(ta, h);
+    const lv_font_t *font = lv_obj_get_style_text_font(ta, LV_PART_MAIN);
+    int32_t border = lv_obj_get_style_border_width(ta, LV_PART_MAIN);
+    int32_t pad = (h - lv_font_get_line_height(font) - 2 * border) / 2;
+    lv_obj_set_style_pad_ver(ta, pad > 0 ? pad : 0, 0);
 }
 
 lv_obj_t *ui_spacer(lv_obj_t *parent)

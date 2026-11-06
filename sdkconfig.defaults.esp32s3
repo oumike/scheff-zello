@@ -19,9 +19,9 @@ CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
 # The compact 320x240 UI's text sizes (see ui_internal.h).
-CONFIG_LV_FONT_MONTSERRAT_8=y
-CONFIG_LV_FONT_MONTSERRAT_10=y
 CONFIG_LV_FONT_MONTSERRAT_12=y
+CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_FONT_MONTSERRAT_16=y
 
 # Internal RAM again: on the S3, IRAM and the heap share one SRAM, so code
 # kept in IRAM for Wi-Fi and lwIP speed comes straight out of the heap. Voice

@@ -53,9 +53,10 @@ static lv_obj_t *labelled_field(lv_obj_t *col, const char *caption, const char *
     lv_obj_t *ta = lv_textarea_create(col);
     lv_textarea_set_one_line(ta, true);
     lv_textarea_set_placeholder_text(ta, placeholder);
-    lv_obj_set_size(ta, LV_PCT(100), UI_FIELD_H);
+    lv_obj_set_width(ta, LV_PCT(100));
     lv_obj_set_style_text_font(ta, UI_FONT, 0);
     lv_obj_set_style_radius(ta, UI_RADIUS, 0);
+    ui_field_fit(ta, UI_FIELD_H);
     ui_field_attach_keyboard(ta, kb);
     lv_obj_add_event_cb(ta, lower_focused, LV_EVENT_FOCUSED, kb);
     return ta;

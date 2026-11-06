@@ -303,6 +303,7 @@ static lv_obj_t *build(lv_obj_t *parent, const char *title, const char *subtitle
     lv_obj_set_flex_grow(s_search, 1);
     lv_obj_set_style_text_font(s_search, UI_FONT, 0);
     lv_obj_set_style_radius(s_search, UI_RADIUS, 0);
+    ui_field_fit(s_search, UI_FIELD_H);
     ui_field_attach_keyboard(s_search, s_kb);
     lv_obj_add_event_cb(s_search, search_changed, LV_EVENT_VALUE_CHANGED, NULL);
     lv_obj_t *clr = ui_button(row, LV_SYMBOL_CLOSE, UI_COLOR_PANEL, search_clear, NULL);

@@ -224,8 +224,7 @@ static void compose_create(lv_obj_t *parent)
     lv_textarea_set_max_length(s_compose, COMPOSE_MAX);
     lv_textarea_set_placeholder_text(s_compose, "Message the channel");
     lv_obj_set_style_text_font(s_compose, UI_FONT_SMALL, 0);
-    lv_obj_set_height(s_compose, UI_EDIT_BUTTON_H + UI_PAD);
-    lv_obj_set_style_pad_ver(s_compose, UI_PAD / 2, 0);
+    ui_field_fit(s_compose, UI_EDIT_BUTTON_H + UI_PAD);
     lv_obj_set_width(s_compose, 0);
     lv_obj_set_flex_grow(s_compose, 1);
     // Ahead of the keyboard's own handler, so the talk controls are gone
@@ -430,8 +429,8 @@ void ui_home_show(void)
         s_volume = ui_volume_row(col);
 #if UI_LANDSCAPE
         // Clear space above and below, between the meter and the talk button.
-        lv_obj_set_height(s_volume, UI_FIELD_H + 4 * UI_PAD);
-        lv_obj_set_style_pad_ver(s_volume, 2 * UI_PAD, 0);
+        lv_obj_set_height(s_volume, UI_FIELD_H + 2 * UI_VOLUME_PAD);
+        lv_obj_set_style_pad_ver(s_volume, UI_VOLUME_PAD, 0);
 #endif
 
 #if !UI_LANDSCAPE
