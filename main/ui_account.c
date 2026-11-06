@@ -162,6 +162,49 @@ static void cancel_clicked(lv_event_t *e)
     close_settings();
 }
 
+static void backup_clicked(lv_event_t *e)
+{
+    ui_backup_save();
+}
+
+// A restore replaces what this screen was showing, so it closes after.
+static void restore_clicked(lv_event_t *e)
+{
+    ui_backup_restore(close_settings);
+}
+
+// Two buttons side by side, sharing the width.
+static void button_pair(lv_obj_t *col, lv_obj_t *(*make)(lv_obj_t *row, int i))
+{
+    lv_obj_t *row = lv_obj_create(col);
+    lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_all(row, 0, 0);
+    lv_obj_set_style_pad_column(row, UI_PAD * 4, 0);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(row, 0, 0);
+    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    for (int i = 0; i < 2; i++) {
+        lv_obj_t *b = make(row, i);
+        lv_obj_set_width(b, 0);
+        lv_obj_set_flex_grow(b, 1);
+    }
+}
+
+static lv_obj_t *backup_button(lv_obj_t *row, int i)
+{
+    return i ? ui_button(row, LV_SYMBOL_DOWNLOAD "  Restore", UI_COLOR_PANEL, restore_clicked, NULL)
+             : ui_button(row, LV_SYMBOL_SD_CARD "  Back up", UI_COLOR_ACCENT, backup_clicked, NULL);
+}
+
+#if UI_LANDSCAPE
+static lv_obj_t *save_button(lv_obj_t *row, int i)
+{
+    return i ? ui_button(row, "Cancel", UI_COLOR_PANEL, cancel_clicked, NULL)
+             : ui_button(row, LV_SYMBOL_SAVE "  Save", UI_COLOR_GO, save_clicked, NULL);
+}
+#endif
+
 // The saved Wi-Fi password is kept when the field is left blank, but only
 // while the network is still the saved one.
 static void wifi_ssid_changed(lv_event_t *e)
@@ -288,25 +331,16 @@ void ui_account_edit(void)
     ui_label(col, "Microphone gain", UI_FONT, UI_COLOR_ACCENT);
     build_audio_fields(col);
     ui_label(col, "Applies and saves as you move it.", UI_FONT_SMALL, UI_COLOR_MUTED);
+    ui_label(col, "Backup", UI_FONT, UI_COLOR_ACCENT);
+    button_pair(col, backup_button);
+    ui_label(col,
+             "Wi-Fi, the account, the channels and every setting, to scheff-zello-backup.yaml on the microSD "
+             "card. Restore reads the newest backup there and replaces them.",
+             UI_FONT_SMALL, UI_COLOR_MUTED);
     ui_spacer(col);
 #if UI_LANDSCAPE
     // Side by side: stacked full-width buttons cost a wide screen too much height.
-    lv_obj_t *row = lv_obj_create(col);
-    lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_all(row, 0, 0);
-    lv_obj_set_style_pad_column(row, UI_PAD * 4, 0);
-    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(row, 0, 0);
-    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_t *const buttons[] = {
-        ui_button(row, LV_SYMBOL_SAVE "  Save", UI_COLOR_GO, save_clicked, NULL),
-        ui_button(row, "Cancel", UI_COLOR_PANEL, cancel_clicked, NULL),
-    };
-    for (int i = 0; i < 2; i++) {
-        lv_obj_set_width(buttons[i], 0);
-        lv_obj_set_flex_grow(buttons[i], 1);
-    }
+    button_pair(col, save_button);
 #else
     ui_button(col, LV_SYMBOL_SAVE "  Save", UI_COLOR_GO, save_clicked, NULL);
     ui_button(col, "Cancel", UI_COLOR_PANEL, cancel_clicked, NULL);

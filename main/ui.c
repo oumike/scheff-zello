@@ -527,16 +527,18 @@ static void onboard_changed(void)
     display_unlock();
 }
 
-// A device that isn't set up yet offers the newest backup on the SD card, once
-// per boot: after an erase that is everything back in one tap.
+// SD card backups. A device that isn't set up yet offers the newest one, once
+// per boot: after an erase that is everything back in one tap. Settings has
+// Back up and Restore buttons.
 static char s_backup_name[96];
+static void (*s_backup_done)(void);
 
 static void backup_import_task(void *arg)
 {
     char msg[128];
     esp_err_t err = web_config_sd_backup_import(s_backup_name, msg, sizeof(msg));
     if (!display_lock()) return;
-    ui_modal_message(msg, err == ESP_OK ? UI_COLOR_GO_LIT : UI_COLOR_STOP, true, NULL);
+    ui_modal_message(msg, err == ESP_OK ? UI_COLOR_GO_LIT : UI_COLOR_STOP, true, err == ESP_OK ? s_backup_done : NULL);
     display_unlock();
 }
 
@@ -546,10 +548,18 @@ static void backup_chosen(int index)
     ui_run_async("backup_import", backup_import_task, NULL);
 }
 
+// `arg` is non-NULL when asked for from Settings: then finding nothing says so.
 static void backup_scan_task(void *arg)
 {
     time_t mtime;
-    if (!web_config_sd_backup_find(s_backup_name, sizeof(s_backup_name), &mtime)) return;
+    if (!web_config_sd_backup_find(s_backup_name, sizeof(s_backup_name), &mtime)) {
+        if (arg && display_lock()) {
+            ui_modal_message("No backup found. Insert the microSD card holding scheff-zello-backup.yaml.",
+                             UI_COLOR_WARN, true, NULL);
+            display_unlock();
+        }
+        return;
+    }
 
     static char title[200];
     struct tm tm;
@@ -563,8 +573,30 @@ static void backup_scan_task(void *arg)
     const lv_color_t colors[] = {UI_COLOR_ACCENT};
     if (!display_lock()) return;
     // Someone may have finished setting up from the browser meanwhile.
-    if (!onboard_complete()) ui_modal_menu(title, items, colors, 1, backup_chosen);
+    if (arg || !onboard_complete()) ui_modal_menu(title, items, colors, 1, backup_chosen);
     display_unlock();
+}
+
+void ui_backup_restore(void (*done)(void))
+{
+    s_backup_done = done;
+    ui_modal_busy("Looking on the SD card...");
+    ui_run_async("backup_scan", backup_scan_task, (void *)1);
+}
+
+static void backup_save_task(void *arg)
+{
+    char msg[160];
+    esp_err_t err = web_config_sd_backup_export(msg, sizeof(msg));
+    if (!display_lock()) return;
+    ui_modal_message(msg, err == ESP_OK ? UI_COLOR_GO_LIT : UI_COLOR_STOP, true, NULL);
+    display_unlock();
+}
+
+void ui_backup_save(void)
+{
+    ui_modal_busy("Saving the backup...");
+    ui_run_async("backup_save", backup_save_task, NULL);
 }
 
 void ui_start(void)

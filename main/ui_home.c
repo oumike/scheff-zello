@@ -127,6 +127,7 @@ static lv_obj_t *plain_row(lv_obj_t *parent)
 }
 
 // The speaker volume slider with its icon and value, saved as it changes.
+#if !UI_VOLUME_VERTICAL
 static lv_obj_t *ui_volume_row(lv_obj_t *parent)
 {
     lv_obj_t *volume_row = plain_row(parent);
@@ -151,6 +152,41 @@ static lv_obj_t *ui_volume_row(lv_obj_t *parent)
     s_volume_value = value;
     return volume_row;
 }
+#endif
+
+#if UI_VOLUME_VERTICAL
+// The same, standing up: the value on top, the slider, the speaker at the foot.
+static lv_obj_t *ui_volume_column(lv_obj_t *parent)
+{
+    lv_obj_t *c = lv_obj_create(parent);
+    lv_obj_remove_style_all(c);
+    lv_obj_set_size(c, UI_VOLUME_VALUE_W, LV_PCT(100));
+    lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(c, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(c, UI_PAD + UI_SLIDER_H / 2, 0);  // the knob overhangs the ends
+    lv_obj_remove_flag(c, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *value = lv_label_create(c);
+    lv_label_set_text_fmt(value, "%u%%", g_settings.volume);
+    lv_obj_set_style_text_font(value, UI_FONT_SMALL, 0);
+    lv_obj_set_style_text_color(value, UI_COLOR_MUTED, 0);
+    lv_obj_t *volume = lv_slider_create(c);
+    lv_slider_set_orientation(volume, LV_SLIDER_ORIENTATION_VERTICAL);
+    lv_slider_set_range(volume, 0, 100);
+    lv_slider_set_value(volume, g_settings.volume, LV_ANIM_OFF);
+    lv_obj_set_width(volume, UI_SLIDER_H);
+    lv_obj_set_height(volume, 0);
+    lv_obj_set_flex_grow(volume, 1);
+    lv_obj_t *icon = lv_label_create(c);
+    lv_label_set_text(icon, LV_SYMBOL_VOLUME_MAX);
+    lv_obj_set_style_text_font(icon, UI_FONT, 0);
+    lv_obj_set_style_text_color(icon, UI_COLOR_MUTED, 0);
+    lv_obj_add_event_cb(volume, volume_event, LV_EVENT_ALL, value);
+    s_volume_slider = volume;
+    s_volume_value = value;
+    return c;
+}
+#endif
 
 // ---- text messages ---------------------------------------------------------
 
@@ -384,7 +420,7 @@ void ui_home_show(void)
         // buttons, leaving the right-hand end to the status bar.
         lv_obj_t *header = plain_row(col);
         lv_obj_set_style_pad_right(header, UI_STATUS_BAR_W, 0);
-        s_channel = ui_label(header, "", UI_FONT, UI_COLOR_ACCENT);
+        s_channel = ui_label(header, "", UI_HOME_HEADER_FONT, UI_COLOR_ACCENT);
         lv_obj_set_width(s_channel, 0);
         lv_obj_set_flex_grow(s_channel, 1);
         lv_label_set_long_mode(s_channel, LV_LABEL_LONG_DOT);
@@ -392,6 +428,7 @@ void ui_home_show(void)
             lv_obj_t *b = ui_button(header, i ? LV_SYMBOL_SETTINGS : LV_SYMBOL_LIST, UI_COLOR_PANEL,
                                     i ? settings_clicked : channels_clicked, NULL);
             lv_obj_set_size(b, UI_EDIT_BUTTON_H + UI_PAD, UI_EDIT_BUTTON_H);
+            lv_obj_set_style_text_font(lv_obj_get_child(b, 0), UI_HOME_HEADER_FONT, 0);
         }
 
         s_status = ui_label(col, "", UI_FONT_SMALL, UI_COLOR_MUTED);
@@ -411,9 +448,19 @@ void ui_home_show(void)
 #endif
 
         // Channel activity: talkers, text messages and errors.
+#if UI_VOLUME_VERTICAL
+        lv_obj_t *mid = plain_row(col);
+        lv_obj_set_height(mid, 0);
+        lv_obj_set_flex_grow(mid, 1);
+        lv_obj_t *box = lv_obj_create(mid);
+        lv_obj_set_size(box, 0, LV_PCT(100));
+        lv_obj_set_flex_grow(box, 1);
+        s_volume = ui_volume_column(mid);
+#else
         lv_obj_t *box = lv_obj_create(col);
         lv_obj_set_width(box, LV_PCT(100));
         lv_obj_set_flex_grow(box, 1);
+#endif
         lv_obj_set_style_bg_color(box, UI_COLOR_PANEL, 0);
         lv_obj_set_style_border_width(box, 0, 0);
         lv_obj_set_style_radius(box, UI_RADIUS, 0);
@@ -426,8 +473,10 @@ void ui_home_show(void)
 #if UI_LANDSCAPE
         meter_create(col);  // above the volume, under the activity panel
 #endif
+#if !UI_VOLUME_VERTICAL
         s_volume = ui_volume_row(col);
-#if UI_LANDSCAPE
+#endif
+#if UI_LANDSCAPE && !UI_VOLUME_VERTICAL
         // Clear space above and below, between the meter and the talk button.
         lv_obj_set_height(s_volume, UI_FIELD_H + 2 * UI_VOLUME_PAD);
         lv_obj_set_style_pad_ver(s_volume, UI_VOLUME_PAD, 0);

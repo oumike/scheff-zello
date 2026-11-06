@@ -77,6 +77,12 @@
 
 // The home screen as rows across a wide screen.
 #define UI_LANDSCAPE    1
+#if CONFIG_ZELLO_BOARD_WIO_TRACKER_L2
+// Home: the volume as a slider up the right-hand side of the activity panel,
+// which gets the height a volume row would take, under a smaller channel name.
+#define UI_VOLUME_VERTICAL 1
+#define UI_HOME_HEADER_FONT UI_FONT_SMALL
+#endif
 // The T-Deck types text on its keyboard, so the on-screen one is never shown;
 // the Wio Tracker L2 is touch only.
 #if CONFIG_ZELLO_BOARD_TDECK
@@ -119,6 +125,13 @@
 
 #endif
 
+#ifndef UI_VOLUME_VERTICAL
+#define UI_VOLUME_VERTICAL 0
+#endif
+#ifndef UI_HOME_HEADER_FONT
+#define UI_HOME_HEADER_FONT UI_FONT
+#endif
+
 // Zello's own palette, dark: the accent is Zello yellow, and the talk button
 // stays green/red so the "safe to talk" signal reads the same as on a radio.
 #define UI_COLOR_BG      lv_color_hex(0x000000)
@@ -135,6 +148,11 @@
 // "Connecting...", the last error), and the colour it is drawn in.
 void ui_zello_describe(const zello_status_t *st, char *out, size_t size);
 lv_color_t ui_zello_color(const zello_status_t *st);
+
+// SD card backup, with the result in a modal. A restore asks first, and calls
+// `done` (may be NULL) once its result is dismissed, if it worked.
+void ui_backup_save(void);
+void ui_backup_restore(void (*done)(void));
 
 // The screensaver over everything (ui_saver.c). Started by ui_start().
 void ui_saver_init(void);

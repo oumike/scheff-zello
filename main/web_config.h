@@ -18,6 +18,10 @@ esp_err_t web_config_start(void);
 // time; returns false if there is no card or no backup on it.
 bool web_config_sd_backup_find(char *name, size_t size, time_t *mtime);
 
+// Writes the complete backup to the SD card, as the web config's SD export
+// does. `msg` gets a one-line result for the screen either way.
+esp_err_t web_config_sd_backup_export(char *msg, size_t size);
+
 // Imports a backup found above, exactly as the web config's SD import does.
 // `msg` gets a one-line result for the screen either way.
 esp_err_t web_config_sd_backup_import(const char *name, char *msg, size_t size);

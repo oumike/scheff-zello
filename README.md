@@ -69,6 +69,8 @@ implemented; it has not yet been through a long soak test on hardware.
   typed on the on-screen keyboard; the UI is the T-Deck's compact layout.
 - Push-to-talk: **hold the button on GPIO0**, or the **Talk button** on screen.
   The **Wake** button on top is the screen button.
+- Home puts the volume up the right-hand side of the activity panel, so the
+  panel gets that row's height.
 - Audio is the ES8311 DAC into the speaker amplifier and the ES7243E microphone
   ADC, sharing one I2S port. Which ES7243E channel carries the microphone is not
   confirmed yet: `MIC_SLOT` in `main/audio.c` averages both for now, and the
@@ -252,6 +254,11 @@ empty `channels: []` leaves the list alone too. Import reports the line number
 of anything it cannot read and then changes nothing. Old XML backups
 (`zello-p4-backup.xml`, from before the rename) still import. Restoring a backup with different Wi-Fi
 credentials reconnects on the spot.
+
+On the device, **Settings → Backup** has *Back up* (writes
+`scheff-zello-backup.yaml` to the card) and *Restore* (asks before importing
+the newest backup on the card). A device that isn't set up yet, after an erase
+say, offers that newest backup by itself at startup.
 
 **The backup contains your Wi-Fi password, your Zello password and your
 developer token in clear text.** Store it accordingly.

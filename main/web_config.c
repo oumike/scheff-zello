@@ -942,23 +942,52 @@ static esp_err_t sd_error(httpd_req_t *req)
 
 // POST /api/sd/export and /api/sd/import: a complete backup at the root of the
 // microSD card.
-static esp_err_t h_sd_export(httpd_req_t *req)
+// Writes the complete backup to the card. ESP_ERR_NOT_FOUND: no card;
+// otherwise `fail` says what went wrong.
+static esp_err_t sd_export(const char **fail)
 {
-    if (check_empty_body(req, true) != ESP_OK) return ESP_FAIL;
-    if (sdcard_mount() != ESP_OK) return sd_error(req);
+    *fail = "Couldn't write to the SD card.";
+    if (sdcard_mount() != ESP_OK) return ESP_ERR_NOT_FOUND;
     if (file_store_recover(SD_BACKUP_PATH) != ESP_OK) {
-        return send_error(req, "500 Internal Server Error", "Couldn't recover the SD card backup.");
+        *fail = "Couldn't recover the SD card backup.";
+        return ESP_FAIL;
     }
     FILE *file = fopen(SD_BACKUP_PATH ".tmp", "w");
-    if (!file) return send_error(req, "500 Internal Server Error", "Couldn't write to the SD card.");
+    if (!file) return ESP_FAIL;
     esp_err_t err = backup_write(backup_file_write, file);
     if (err == ESP_OK && fflush(file) != 0) err = ESP_FAIL;
     if (fclose(file) != 0) err = ESP_FAIL;
     if (err == ESP_OK) err = file_store_commit(SD_BACKUP_PATH);
     if (err != ESP_OK) {
         remove(SD_BACKUP_PATH ".tmp");
-        return send_error(req, "500 Internal Server Error", "Couldn't write to the SD card.");
+        return ESP_FAIL;
     }
+    return ESP_OK;
+}
+
+esp_err_t web_config_sd_backup_export(char *msg, size_t size)
+{
+    const char *fail;
+    esp_err_t err = sd_export(&fail);
+    if (err == ESP_ERR_NOT_FOUND) {
+        strlcpy(msg, "No SD card found. Insert a FAT-formatted microSD card.", size);
+    } else if (err != ESP_OK) {
+        strlcpy(msg, fail, size);
+    } else {
+        unsigned n = channel_list_count();
+        snprintf(msg, size, "Saved the settings and %u channel%s to " BACKUP_FILE_NAME " on the SD card.", n,
+                 n == 1 ? "" : "s");
+    }
+    return err;
+}
+
+static esp_err_t h_sd_export(httpd_req_t *req)
+{
+    if (check_empty_body(req, true) != ESP_OK) return ESP_FAIL;
+    const char *fail;
+    esp_err_t err = sd_export(&fail);
+    if (err == ESP_ERR_NOT_FOUND) return sd_error(req);
+    if (err != ESP_OK) return send_error(req, "500 Internal Server Error", fail);
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "path", BACKUP_FILE_NAME);
     cJSON_AddNumberToObject(root, "count", channel_list_count());
