@@ -26,3 +26,11 @@ bool input_keys_talk_active(void);
 // focused once it is, if that happens within a second. Must be called with
 // the LVGL lock held.
 void input_keys_focus(lv_obj_t *obj);
+
+// A short trackball click (T-Deck), told apart from a hold by ui_saver.c:
+// Enter, except on the talk screen. Must be called with the LVGL lock held.
+void input_keys_click(void);
+
+// Whether the Tanmatsu's Power button is down, as the coprocessor last
+// reported it. The screen button there.
+bool input_keys_power_button(void);

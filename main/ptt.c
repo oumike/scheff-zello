@@ -6,6 +6,7 @@
 #include "esp_log.h"
 #include "board.h"
 #include "settings.h"
+#include "ui.h"
 #include "zello_client.h"
 
 static const char *TAG = "ptt";
@@ -13,13 +14,18 @@ static const char *TAG = "ptt";
 #include "input_keys.h"
 #endif
 
-// Hold-to-talk on the board's button (BOOT on the P4, the trackball click on
-// the T-Deck, the side button on GPIO0 on the Wio Tracker L2), debounced by requiring a stable level for three consecutive
-// 10 ms samples. With ptt_latch set, a press toggles instead, which is easier
-// for a long call than holding a small button.
+// Hold-to-talk on the board's button (the trackball click on the T-Deck, the
+// side button on GPIO0 on the Wio Tracker L2), debounced by requiring a stable
+// level for three consecutive 10 ms samples. With ptt_latch set, a press
+// toggles instead, which is easier for a long call than holding a small
+// button.
 //
 // On the T-Deck the click also selects things, so it only talks while the
 // home screen is in front; leaving it counts as letting go.
+//
+// Nothing talks while the screensaver is up or the screen is dark, and a press
+// that was down then has to be let go first: on the T-Deck the same click,
+// held, is what wakes the screen.
 #ifdef BOARD_PTT_BUTTON
 static void ptt_task(void *arg)
 {
@@ -28,6 +34,10 @@ static void ptt_task(void *arg)
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(10));
         bool now = gpio_get_level(BOARD_PTT_BUTTON) == 0;
+        static bool s_blocked;
+        if (ui_saver_active()) s_blocked = true;
+        else if (!now) s_blocked = false;
+        if (s_blocked) now = false;
 #if CONFIG_ZELLO_BOARD_TDECK
         static bool s_raw_was;
         if (now && !s_raw_was && !input_keys_talk_active()) ESP_LOGI(TAG, "button ignored: not on the home screen");
@@ -55,7 +65,8 @@ static void ptt_task(void *arg)
 void ptt_button_start(void)
 {
 #ifndef BOARD_PTT_BUTTON
-    // No talk button (the Tanmatsu, which has no microphone either).
+    // No talk button (the T-Display-P4's BOOT is its screen button; the
+    // Tanmatsu has no microphone either).
     return;
 #else
     gpio_config_t io = {

@@ -170,6 +170,22 @@ void zello_get_log(char *out, size_t size)
     unlock();
 }
 
+size_t zello_get_recent_log(char *out, size_t size, size_t lines)
+{
+    out[0] = 0;
+    if (!s_log) return 0;
+    lock();
+    size_t count = s_log_count;
+    size_t kept = count > LOG_LINES ? LOG_LINES : count;
+    if (lines > kept) lines = kept;
+    for (size_t i = count - lines; i < count; i++) {
+        if (i > count - lines) strlcat(out, "\n", size);
+        strlcat(out, s_log[i % LOG_LINES], size);
+    }
+    unlock();
+    return count;
+}
+
 // ---- status ----------------------------------------------------------------
 
 void zello_get_status(zello_status_t *out)

@@ -38,10 +38,11 @@
 #define BOARD_I2S_DIN  11  // codec ADC -> P4
 #define BOARD_ES8311_ADDR 0x18
 
-// BOOT button, active low. Shared with the Ethernet RMII TXD1, so don't use
-// it as PTT if Ethernet is ever enabled.
+// BOOT button, active low: the screen button, as camillia-mt uses it (tap
+// for the screensaver, hold to wake). Talking is on the screen. Shared with
+// the Ethernet RMII TXD1, so it can't stay a button if Ethernet is enabled.
 #define BOARD_BOOT_BUTTON 35
-#define BOARD_PTT_BUTTON  BOARD_BOOT_BUTTON
+#define BOARD_WAKE_BUTTON BOARD_BOOT_BUTTON
 
 #elif CONFIG_ZELLO_BOARD_TANMATSU
 
@@ -95,11 +96,19 @@
 #define BOARD_ES8311_ADDR  0x18
 #define BOARD_ES7243E_ADDR 0x14
 
+// The top Wake button: expander IO0, active low. The expander pulls this
+// line low when any of its inputs changes.
+#define BOARD_EXPANDER_INT 45
+
 // The SPI host the LCD uses.
 spi_host_device_t board_spi_host(void);
 
 // microSD card supply (expander).
 esp_err_t board_sd_power(bool on);
+
+// Reads the Wake button. Only touches the bus when the expander has flagged a
+// change or the button was down last time, so it is cheap to poll.
+esp_err_t board_wake_button(bool *pressed);
 
 #elif CONFIG_ZELLO_BOARD_TDECK
 

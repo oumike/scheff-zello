@@ -38,3 +38,7 @@ bool display_test_pattern(void);
 
 // Panel brightness, normalized to 0-255.
 void display_set_brightness(uint8_t level);
+
+// The backlight off (a dark panel; LVGL keeps running) or back at the level
+// display_reveal() lit it to.
+void display_backlight(bool on);

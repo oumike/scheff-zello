@@ -86,6 +86,11 @@ esp_err_t zello_send_text(const char *text);
 #define ZELLO_LOG_MAX 8192
 void zello_get_log(char *out, size_t size);
 
+// The last `lines` lines of that log, oldest first, newline-separated.
+// Returns how many lines were ever logged, which changes whenever there is a
+// new one.
+size_t zello_get_recent_log(char *out, size_t size, size_t lines);
+
 // Registers a callback run whenever the status or the log changes, so the UI
 // can redraw without polling hard. Called from the client's own tasks.
 void zello_set_changed_cb(void (*cb)(void));

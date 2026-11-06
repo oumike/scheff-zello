@@ -321,11 +321,37 @@ static esp_err_t exp_release(int pin)
     return err;
 }
 
+#define XIO_WAKE_BUTTON 0  // input, active low
+
+esp_err_t board_wake_button(bool *pressed)
+{
+    static bool s_down;
+    if (!s_exp) return ESP_ERR_INVALID_STATE;
+    if (!s_down && gpio_get_level(BOARD_EXPANDER_INT)) {
+        *pressed = false;
+        return ESP_OK;
+    }
+    uint16_t in;
+    xSemaphoreTake(s_exp_lock, portMAX_DELAY);
+    esp_err_t err = exp_read16(EXP_REG_IN0, &in);  // also clears the interrupt
+    xSemaphoreGive(s_exp_lock);
+    // A bus that isn't answering reads as released, so a hold can't stick.
+    s_down = err == ESP_OK && !(in & (1u << XIO_WAKE_BUTTON));
+    *pressed = s_down;
+    return err;
+}
+
 esp_err_t board_init(void)
 {
     gpio_config_t io = {.pin_bit_mask = 1ULL << BOARD_LORA_CS, .mode = GPIO_MODE_OUTPUT};
     gpio_config(&io);
     gpio_set_level(BOARD_LORA_CS, 1);
+    gpio_config_t irq = {
+        .pin_bit_mask = 1ULL << BOARD_EXPANDER_INT,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+    };
+    gpio_config(&irq);
 
     i2c_master_bus_config_t i2c = {
         .i2c_port = 0,

@@ -249,7 +249,7 @@ static void compose_create(lv_obj_t *parent)
 
 // ---- periodic refresh ------------------------------------------------------
 
-static void describe(const zello_status_t *st, char *out, size_t size)
+void ui_zello_describe(const zello_status_t *st, char *out, size_t size)
 {
     if (!net_wifi_has_ip()) {
         snprintf(out, size, LV_SYMBOL_WIFI " Connecting to %s...", g_settings.wifi_ssid);
@@ -275,7 +275,7 @@ static void describe(const zello_status_t *st, char *out, size_t size)
     }
 }
 
-static lv_color_t status_color(const zello_status_t *st)
+lv_color_t ui_zello_color(const zello_status_t *st)
 {
     if (!net_wifi_has_ip()) return UI_COLOR_WARN;
     switch (st->state) {
@@ -291,11 +291,11 @@ static void refresh(lv_timer_t *t)
     zello_get_status(&st);
 
     char text[sizeof(s_status_cache)];
-    describe(&st, text, sizeof(text));
+    ui_zello_describe(&st, text, sizeof(text));
     if (strcmp(text, s_status_cache)) {
         strlcpy(s_status_cache, text, sizeof(s_status_cache));
         lv_label_set_text(s_status, text);
-        lv_obj_set_style_text_color(s_status, status_color(&st), 0);
+        lv_obj_set_style_text_color(s_status, ui_zello_color(&st), 0);
     }
     ui_web_hint_update(s_web);
 

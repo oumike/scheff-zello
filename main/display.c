@@ -792,6 +792,11 @@ void display_reveal(void)
     display_set_brightness(BRIGHTNESS_DEFAULT);
 }
 
+void display_backlight(bool on)
+{
+    display_set_brightness(on ? BRIGHTNESS_DEFAULT : 0);
+}
+
 bool display_lock(void)
 {
     return lvgl_port_lock(0);

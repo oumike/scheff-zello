@@ -10,6 +10,7 @@
 #include "channel_list.h"
 #include "display.h"
 #include "net_wifi.h"
+#include "zello_client.h"
 
 #if CONFIG_ZELLO_BOARD_TANMATSU
 
@@ -127,6 +128,14 @@
 #define UI_COLOR_GO_LIT  lv_color_hex(0x35d07f)
 #define UI_COLOR_STOP    lv_color_hex(0xd23c3c)
 #define UI_COLOR_WARN    lv_color_hex(0xe0a526)
+
+// The one-line Zello status Home shows ("In <channel> - N listening",
+// "Connecting...", the last error), and the colour it is drawn in.
+void ui_zello_describe(const zello_status_t *st, char *out, size_t size);
+lv_color_t ui_zello_color(const zello_status_t *st);
+
+// The screensaver over everything (ui_saver.c). Started by ui_start().
+void ui_saver_init(void);
 
 // ---- screens ----
 void ui_wifi_show(void);

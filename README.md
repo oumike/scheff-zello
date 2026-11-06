@@ -39,7 +39,8 @@ implemented; it has not yet been through a long soak test on hardware.
 - The **ESP32-C6** coprocessor must be running ESP-Hosted slave firmware
   matching `third_party/esp_hosted` (v2.12.x) — the LilygoBox factory image
   does. `scripts/flash-c6.sh` reflashes it if another project overwrote it.
-- Push-to-talk is the **BOOT button**, or the big button on screen.
+- Push-to-talk is the big button on screen. The **BOOT button** is the screen
+  button (see *Screensaver* below).
 
 ### LilyGO T-Deck / T-Deck Plus
 
@@ -56,6 +57,8 @@ implemented; it has not yet been through a long soak test on hardware.
   - The **Talk button** along the bottom of the screen, by touch.
 - Elsewhere the trackball click selects; on the home screen, where the click
   means talk, **Enter** presses the control the trackball has highlighted.
+- **Hold the trackball click** for 2 s anywhere but the home screen to bring up
+  the screensaver; hold it again, or type any key, to wake.
 - Audio is the ES7210 microphone ADC and the MAX98357A speaker amplifier. The
   LoRa radio and GPS are left off.
 
@@ -65,6 +68,7 @@ implemented; it has not yet been through a long soak test on hardware.
 - 320x240 NV3031B LCD (QSPI) with GT911 touch. It has no keyboard, so text is
   typed on the on-screen keyboard; the UI is the T-Deck's compact layout.
 - Push-to-talk: **hold the button on GPIO0**, or the **Talk button** on screen.
+  The **Wake** button on top is the screen button.
 - Audio is the ES8311 DAC into the speaker amplifier and the ES7243E microphone
   ADC, sharing one I2S port. Which ES7243E channel carries the microphone is not
   confirmed yet: `MIC_SLOT` in `main/audio.c` averages both for now, and the
@@ -80,6 +84,7 @@ implemented; it has not yet been through a long soak test on hardware.
 - The 800x480 LCD (turned to landscape) and the full keyboard. Typing anywhere
   on the home screen starts a channel message; **Enter** sends it. Arrows and
   Tab move between controls, Esc goes back, and the volume keys set the volume.
+  The **Power** button is the screen button, and any key also wakes it.
 - **Listen and text only**: the Tanmatsu has no microphone, so the Talk button
   reads *no microphone* and push-to-talk is ignored.
 - Audio is the ES8156 DAC into the speaker and the **headphone jack**. Plugging
@@ -179,7 +184,7 @@ the top, then channels by how often you have joined them.
 
 The home screen is also the talk screen:
 
-- **Hold the big button** (or the BOOT button) to talk. It is green when the
+- **Hold the big button** (or the board's talk button) to talk. It is green when the
   channel is yours, red with the talker's name while someone else holds it, and
   amber while the server is allocating the stream. Zello is half duplex, so a
   press is ignored while someone else is talking.
@@ -196,6 +201,21 @@ The home screen is also the talk screen:
   which hides the talk controls until it closes; on the T-Deck and Tanmatsu just
   start typing on the home screen (on the T-Deck a leading Space still talks). The browser's *Channel activity* can send
   them too.
+
+### Screensaver
+
+After 2 minutes untouched (once set up), or a tap on the board's screen button,
+the screen shows a schefflera bouncing slowly round it, carrying the Zello
+status and the channel's latest activity (who is talking, or the last two
+lines). Audio keeps playing. After 10 more minutes the screen goes dark.
+
+- **Hold the screen button 2 s** to get back to where you were. A tap does
+  nothing while the screensaver is up, and lights it again from a dark screen,
+  so a pocket can't wake it.
+- Push-to-talk is ignored while the screensaver is up or the screen is dark.
+- The screen button is **BOOT** on the T-Display-P4, **Wake** on the Wio
+  Tracker L2 and **Power** on the Tanmatsu; the T-Deck uses a held trackball
+  click (or any key to wake).
 
 ## Backup and restore
 
@@ -273,7 +293,7 @@ crash [test]                last reset reason and crash reports; 'test' crashes 
 | `onboard.c` | The three onboarding steps, shared by the screen and the browser |
 | `crash_report.c` | Crash-surviving log ring, core dump and disconnect reports to microSD |
 | `web_config.c` | HTTP API, the setup hotspot's lifetime, backup export/import |
-| `ui*.c` | LVGL screens: Wi-Fi, account, channels, home/talk |
+| `ui*.c` | LVGL screens: Wi-Fi, account, channels, home/talk, the screensaver |
 | `xml_util.c` | The little XML the stored channel list (and old XML backups) need |
 | `yaml_util.c` | The little YAML the backup file needs |
 

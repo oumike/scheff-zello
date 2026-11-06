@@ -10,6 +10,7 @@
 #include "board.h"
 #include "display.h"
 #include "settings.h"
+#include "ui.h"
 #include "zello_client.h"
 #if CONFIG_ZELLO_BOARD_TANMATSU
 #include "bsp/input.h"
@@ -20,8 +21,10 @@ static const char *TAG = "input";
 // One LVGL keypad carries the keyboard and, on the T-Deck, the trackball:
 // rolling (or the Tanmatsu's arrow keys) moves focus, or a dropdown's
 // selection, or a slider. The T-Deck's click is Enter except on the talk
-// screen, where ptt.c owns it. On the talk screen, typing goes to the
-// message field.
+// screen, where ptt.c owns it; ui_saver.c reads it, since held it is also
+// the screen button, and hands a short click back as input_keys_click(). On
+// the talk screen, typing goes to the message field. While the screensaver is
+// up, a typed key wakes the screen instead.
 
 #define KEY_QUEUE_LEN     32
 #define FOCUS_REFRESH_MS  150
@@ -104,7 +107,6 @@ static void poll_keyboard(void)
 static void poll_trackball(void)
 {
     static int64_t last_move_us;
-    static bool click_was_down;
 
     uint32_t n[TB_COUNT];
     for (int i = 0; i < TB_COUNT; i++) {
@@ -112,6 +114,8 @@ static void poll_trackball(void)
         s_tb_count[i] = 0;
     }
     int64_t now = esp_timer_get_time();
+    // Rolling doesn't wake the screen: a pocket does that all day.
+    if (ui_saver_active()) return;
     if (now - last_move_us >= MOVE_DEBOUNCE_US) {
         bool open = dropdown_open();
         uint32_t key = 0;
@@ -124,11 +128,11 @@ static void poll_trackball(void)
             last_move_us = now;
         }
     }
+}
 
-    // The click is Enter everywhere but the talk screen.
-    bool down = gpio_get_level(BOARD_TBALL_CLICK) == 0;
-    if (down && !click_was_down && !s_talk_active) enqueue(LV_KEY_ENTER);
-    click_was_down = down;
+void input_keys_click(void)
+{
+    if (!s_talk_active) enqueue(LV_KEY_ENTER);
 }
 
 static void poll_input(void)
@@ -171,6 +175,7 @@ static esp_err_t backend_init(void)
 #define VOLUME_STEP 10
 
 static QueueHandle_t s_events;
+static volatile bool s_power_down;
 
 // The volume keys on the side: a step the slider on Home follows.
 static void volume_step(int delta)
@@ -226,6 +231,8 @@ static void poll_input(void)
             // headphone jack by itself; this is just for the log.
             if (ev.args_action.type == BSP_INPUT_ACTION_TYPE_AUDIO_JACK) {
                 ESP_LOGI(TAG, "headphones %s", ev.args_action.state ? "plugged in" : "unplugged");
+            } else if (ev.args_action.type == BSP_INPUT_ACTION_TYPE_POWER_BUTTON) {
+                s_power_down = ev.args_action.state;
             }
             break;
         default: break;
@@ -241,6 +248,11 @@ static esp_err_t backend_init(void)
         ESP_LOGI(TAG, "audio out: %s", jack ? "headphones" : "speaker");
     }
     return ESP_OK;
+}
+
+bool input_keys_power_button(void)
+{
+    return s_power_down;
 }
 
 #endif
@@ -270,6 +282,10 @@ static void keypad_read(lv_indev_t *indev, lv_indev_data_t *data)
         return;
     }
     poll_input();
+    if (s_q_len && ui_saver_active()) {
+        s_q_len = 0;
+        ui_saver_key();
+    }
     if (s_q_len) {
         last_key = s_queue[s_q_head];
         route_to_compose(last_key);

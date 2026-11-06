@@ -517,5 +517,6 @@ void ui_start(void)
     display_lock();
     onboard_set_ui_cb(onboard_changed);
     show_stage();
+    ui_saver_init();
     display_unlock();
 }
