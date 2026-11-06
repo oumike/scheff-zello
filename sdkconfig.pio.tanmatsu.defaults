@@ -31,3 +31,7 @@ CONFIG_LV_FONT_MONTSERRAT_16=y
 # leaves alone.
 CONFIG_BOOTLOADER_CUSTOM_RESERVE_RTC=y
 CONFIG_BOOTLOADER_CUSTOM_RESERVE_RTC_SIZE=0x100
+
+# The extras above push the bootloader past the 24 KB between 0x2000 and the
+# partition table at 0x8000; quieter bootloader logging, as in wadamesh, fits it.
+CONFIG_BOOTLOADER_LOG_LEVEL_ERROR=y
