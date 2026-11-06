@@ -26,10 +26,13 @@ static const char *TAG = "input";
 #define KEY_QUEUE_LEN     32
 #define FOCUS_REFRESH_MS  150
 #define FOCUS_MAX         96
+#define FOCUS_PENDING_US  (1000 * 1000)
 
 static lv_group_t *s_group;
 static lv_obj_t *s_talk_screen, *s_compose;
 static volatile bool s_talk_active;
+static lv_obj_t *s_pending_focus;
+static int64_t s_pending_until;
 
 static uint32_t s_queue[KEY_QUEUE_LEN];
 static uint8_t s_q_head, s_q_len;
@@ -320,6 +323,25 @@ static void collect(lv_obj_t *o, lv_obj_t **out, size_t *n)
     for (uint32_t i = 0; i < count; i++) collect(lv_obj_get_child(o, i), out, n);
 }
 
+// A field input_keys_focus() asked for, once it has joined the group. The
+// pointer is only compared against live objects, and dropped after a second
+// so a later object at the same address isn't focused by mistake.
+static void apply_pending_focus(lv_obj_t *const *now, size_t n)
+{
+    if (!s_pending_focus) return;
+    if (esp_timer_get_time() > s_pending_until) {
+        s_pending_focus = NULL;
+        return;
+    }
+    for (size_t i = 0; i < n; i++) {
+        if (now[i] == s_pending_focus) {
+            lv_group_focus_obj(now[i]);
+            s_pending_focus = NULL;
+            return;
+        }
+    }
+}
+
 static void focus_refresh(lv_timer_t *t)
 {
     static lv_obj_t *s_last[FOCUS_MAX];
@@ -331,7 +353,10 @@ static void focus_refresh(lv_timer_t *t)
     lv_obj_t *now[FOCUS_MAX];
     size_t n = 0;
     collect(root, now, &n);
-    if (n == s_last_n && !memcmp(now, s_last, n * sizeof(now[0]))) return;
+    if (n == s_last_n && !memcmp(now, s_last, n * sizeof(now[0]))) {
+        apply_pending_focus(now, n);
+        return;
+    }
 
     // The set changed (another screen, an overlay, a list refilled): rebuild,
     // keeping focus where it was if that object is still here.
@@ -345,6 +370,17 @@ static void focus_refresh(lv_timer_t *t)
     if (kept) lv_group_focus_obj(focused);
     memcpy(s_last, now, n * sizeof(now[0]));
     s_last_n = n;
+    apply_pending_focus(now, n);
+}
+
+void input_keys_focus(lv_obj_t *obj)
+{
+    s_pending_focus = obj;
+    s_pending_until = esp_timer_get_time() + FOCUS_PENDING_US;
+    if (lv_obj_get_group(obj) == s_group) {
+        lv_group_focus_obj(obj);
+        s_pending_focus = NULL;
+    }
 }
 
 void input_keys_set_talk_screen(lv_obj_t *scr, lv_obj_t *compose)

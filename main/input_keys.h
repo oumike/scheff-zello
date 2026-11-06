@@ -20,3 +20,9 @@ void input_keys_set_talk_screen(lv_obj_t *scr, lv_obj_t *compose);
 // True while the talk screen is in front with nothing over it. Safe to call
 // from any task.
 bool input_keys_talk_active(void);
+
+// Moves keyboard focus to `obj`, a field the code wants typed into next. If
+// it isn't in the focus group yet (its screen is still coming up), it is
+// focused once it is, if that happens within a second. Must be called with
+// the LVGL lock held.
+void input_keys_focus(lv_obj_t *obj);

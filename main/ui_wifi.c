@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "display.h"
+#include "input_keys.h"
 #include "net_wifi.h"
 #include "onboard.h"
 #include "settings.h"
@@ -127,10 +128,15 @@ void ui_wifi_prompt_password(lv_obj_t *pass, bool secure)
 {
     lv_textarea_set_text(pass, "");
     // Prompt for the password straight away; an open network skips it.
-    if (secure) {
-        lv_obj_add_state(pass, LV_STATE_FOCUSED);
-        lv_obj_send_event(pass, LV_EVENT_FOCUSED, NULL);
-    }
+    if (!secure) return;
+#if UI_HAS_KEYBOARD
+    // Focus belongs to the keyboard's group: marking the field focused by
+    // hand would blink its cursor while keys went to another field.
+    input_keys_focus(pass);
+#else
+    lv_obj_add_state(pass, LV_STATE_FOCUSED);
+    lv_obj_send_event(pass, LV_EVENT_FOCUSED, NULL);
+#endif
 }
 
 static void setup_picked(const net_wifi_ap_t *ap)
