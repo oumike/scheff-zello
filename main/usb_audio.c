@@ -34,7 +34,9 @@ typedef struct {
 static stream_t s_rx, s_tx;
 static QueueHandle_t s_events;
 static int8_t s_volume = 100;
-static int16_t *s_scratch;  // one frame at the adapter's rate and channel count
+// One frame at the adapter's rate and channel count, per direction: the mic
+// and playback tasks run at the same time.
+static int16_t *s_rx_buf, *s_tx_buf;
 
 #define MAX_MULT        3
 #define SCRATCH_BYTES   (AUDIO_FRAME * MAX_MULT * 2 * sizeof(int16_t))
@@ -43,25 +45,32 @@ static int16_t *s_scratch;  // one frame at the adapter's rate and channel count
 // ---- hardware mic monitoring ------------------------------------------------
 //
 // Many adapters (C-Media's in particular) mix the microphone into the
-// headphone output in hardware, through a feature unit that feeds a mixer
-// unit (Linux calls it "Mic Playback"). That is sidetone the user hears as
-// feedback, and the UAC driver doesn't expose it, so mute it ourselves.
+// headphone output in hardware (Linux calls it "Mic Playback"). That is
+// sidetone the user hears as feedback, and the UAC driver doesn't expose it,
+// so silence it ourselves: any feature unit that carries a physical input
+// towards a speaker or headphone terminal is muted, and failing that, the
+// mixer unit's controls for its microphone inputs are turned all the way down.
 
-#define UAC_CS_INTERFACE    0x24
-#define UAC_INPUT_TERMINAL  0x02
-#define UAC_OUTPUT_TERMINAL 0x03
-#define UAC_MIXER_UNIT      0x04
-#define UAC_SELECTOR_UNIT   0x05
-#define UAC_FEATURE_UNIT    0x06
+#define UAC_CS_INTERFACE     0x24
+#define UAC_INPUT_TERMINAL   0x02
+#define UAC_OUTPUT_TERMINAL  0x03
+#define UAC_MIXER_UNIT       0x04
+#define UAC_SELECTOR_UNIT    0x05
+#define UAC_FEATURE_UNIT     0x06
 #define UAC_TT_USB_STREAMING 0x0101
-#define MAX_UNITS 16
+#define UAC_FU_MUTE          0x01
+#define UAC_FU_VOLUME        0x02
+#define MAX_UNITS 24
 #define MAX_SRCS  8
+#define MAX_CH    8
 
 typedef struct {
     uint8_t id, subtype, nsrc;
     uint8_t src[MAX_SRCS];
     uint16_t term_type;
-    uint8_t fu_controls;  // master channel's bmaControls (low byte)
+    uint8_t nch;               // channels this unit outputs (0: as its source)
+    uint8_t fu_nctl;           // feature unit: channels described, master included
+    uint8_t fu_ctl[MAX_CH + 1];  // feature unit: low byte of bmaControls per channel
 } unit_t;
 
 static usb_host_client_handle_t s_client;
@@ -101,7 +110,37 @@ static bool from_physical_input(const unit_t *u, int n, uint8_t id)
     return false;
 }
 
-static esp_err_t set_cur(usb_device_handle_t dev, uint8_t ac_iface, uint8_t unit, uint8_t control, const uint8_t *data,
+// Whether a unit's output reaches a speaker or headphone terminal rather than
+// only the USB capture stream.
+static bool reaches_output(const unit_t *u, int n, uint8_t id, int depth)
+{
+    if (depth > MAX_UNITS) return false;
+    for (int i = 0; i < n; i++) {
+        for (int s = 0; s < u[i].nsrc; s++) {
+            if (u[i].src[s] != id) continue;
+            if (u[i].subtype == UAC_OUTPUT_TERMINAL) {
+                if (u[i].term_type != UAC_TT_USB_STREAMING) return true;
+            } else if (reaches_output(u, n, u[i].id, depth + 1)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static int channels_of(const unit_t *u, int n, uint8_t id)
+{
+    for (int depth = 0; depth < MAX_UNITS; depth++) {
+        const unit_t *x = find_unit(u, n, id);
+        if (!x) return 1;
+        if (x->nch) return x->nch;
+        if (x->nsrc != 1) return 1;
+        id = x->src[0];
+    }
+    return 1;
+}
+
+static esp_err_t set_cur(usb_device_handle_t dev, uint8_t ac_iface, uint8_t unit, uint16_t value, const uint8_t *data,
                          uint8_t len)
 {
     usb_transfer_t *xfer;
@@ -110,7 +149,7 @@ static esp_err_t set_cur(usb_device_handle_t dev, uint8_t ac_iface, uint8_t unit
     setup->bmRequestType = USB_BM_REQUEST_TYPE_DIR_OUT | USB_BM_REQUEST_TYPE_TYPE_CLASS |
                            USB_BM_REQUEST_TYPE_RECIP_INTERFACE;
     setup->bRequest = 0x01;  // SET_CUR
-    setup->wValue = (uint16_t)control << 8;  // channel 0: master
+    setup->wValue = value;
     setup->wIndex = (uint16_t)unit << 8 | ac_iface;
     setup->wLength = len;
     memcpy(xfer->data_buffer + USB_SETUP_PACKET_SIZE, data, len);
@@ -128,17 +167,67 @@ static esp_err_t set_cur(usb_device_handle_t dev, uint8_t ac_iface, uint8_t unit
     return err;
 }
 
+static const uint8_t k_mute_on = 1;
+static const uint8_t k_silent[2] = {0x00, 0x80};  // 0x8000: -inf dB
+
+// Mutes one feature unit: through its master control if it has one, else on
+// every channel that has a mute or volume control.
+static int mute_feature_unit(usb_device_handle_t dev, uint8_t ac_iface, const unit_t *fu)
+{
+    int ok = 0;
+    for (int ch = 0; ch < fu->fu_nctl; ch++) {
+        uint8_t ctl = fu->fu_ctl[ch];
+        esp_err_t err = ESP_ERR_NOT_SUPPORTED;
+        if (ctl & 0x01) err = set_cur(dev, ac_iface, fu->id, UAC_FU_MUTE << 8 | ch, &k_mute_on, 1);
+        if (ctl & 0x02) {
+            esp_err_t v = set_cur(dev, ac_iface, fu->id, UAC_FU_VOLUME << 8 | ch, k_silent, 2);
+            if (err != ESP_OK) err = v;
+        }
+        if (ctl & 0x03) {
+            ESP_LOGI(TAG, "  unit %u ch %d: %s", fu->id, ch, err == ESP_OK ? "silenced" : esp_err_to_name(err));
+            if (err == ESP_OK) ok++;
+        }
+        if (ch == 0 && ok) break;  // the master covers every channel
+    }
+    return ok;
+}
+
+// Turns down a mixer unit's controls from each physical input's channels to
+// every output channel. Controls the mixer doesn't have just stall.
+static int mute_mixer_inputs(usb_device_handle_t dev, uint8_t ac_iface, const unit_t *u, int n, const unit_t *mx)
+{
+    int ok = 0, in_ch = 1;
+    for (int s = 0; s < mx->nsrc; s++) {
+        int nch = channels_of(u, n, mx->src[s]);
+        if (from_physical_input(u, n, mx->src[s])) {
+            for (int i = 0; i < nch; i++) {
+                for (int o = 1; o <= mx->nch; o++) {
+                    if (set_cur(dev, ac_iface, mx->id, (uint16_t)(in_ch + i) << 8 | o, k_silent, 2) == ESP_OK) ok++;
+                }
+            }
+            ESP_LOGI(TAG, "  mixer %u, input from %u: %d control(s) silenced", mx->id, mx->src[s], ok);
+        }
+        in_ch += nch;
+    }
+    return ok;
+}
+
 static void mute_monitor(uint8_t addr)
 {
     usb_device_handle_t dev;
-    if (!s_client || usb_host_device_open(s_client, addr, &dev) != ESP_OK) return;
+    if (!s_client) return;
+    esp_err_t err = usb_host_device_open(s_client, addr, &dev);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "mic monitor: can't open device %u: %s", addr, esp_err_to_name(err));
+        return;
+    }
     const usb_config_desc_t *cfg;
     if (usb_host_get_active_config_descriptor(dev, &cfg) != ESP_OK) {
         usb_host_device_close(s_client, dev);
         return;
     }
 
-    unit_t units[MAX_UNITS];
+    static unit_t units[MAX_UNITS];
     int n = 0;
     int ac_iface = -1;
     bool in_ac = false;
@@ -152,7 +241,7 @@ static void mute_monitor(uint8_t addr)
             unit_t u = {.id = p[3], .subtype = p[2]};
             switch (u.subtype) {
             case UAC_INPUT_TERMINAL:
-                if (len >= 6) u.term_type = p[4] | p[5] << 8;
+                if (len >= 8) u.term_type = p[4] | p[5] << 8, u.nch = p[7];
                 break;
             case UAC_OUTPUT_TERMINAL:
                 if (len >= 8) u.term_type = p[4] | p[5] << 8, u.nsrc = 1, u.src[0] = p[7];
@@ -160,42 +249,47 @@ static void mute_monitor(uint8_t addr)
             case UAC_MIXER_UNIT:
             case UAC_SELECTOR_UNIT:
                 if (len >= 5) {
-                    for (int i = 0; i < p[4] && i < MAX_SRCS && 5 + i < len; i++) u.src[u.nsrc++] = p[5 + i];
+                    int pins = p[4];
+                    for (int i = 0; i < pins && i < MAX_SRCS && 5 + i < len; i++) u.src[u.nsrc++] = p[5 + i];
+                    if (u.subtype == UAC_MIXER_UNIT && 5 + pins < len) u.nch = p[5 + pins];
                 }
                 break;
             case UAC_FEATURE_UNIT:
-                if (len >= 7) u.nsrc = 1, u.src[0] = p[4], u.fu_controls = p[6];
+                if (len >= 7 && p[5]) {
+                    u.nsrc = 1, u.src[0] = p[4];
+                    int size = p[5];
+                    int count = (len - 7) / size;
+                    for (int ch = 0; ch < count && ch <= MAX_CH; ch++) u.fu_ctl[u.fu_nctl++] = p[6 + ch * size];
+                }
                 break;
             default:
                 u.id = 0;
                 break;
             }
-            if (u.id) units[n++] = u;
+            if (u.id) {
+                units[n++] = u;
+                ESP_LOGI(TAG, "AC unit %u: type %u, term 0x%04x, %u ch, src %u %u %u, ctl %02x %02x %02x", u.id,
+                         u.subtype, u.term_type, u.nch, u.nsrc > 0 ? u.src[0] : 0, u.nsrc > 1 ? u.src[1] : 0,
+                         u.nsrc > 2 ? u.src[2] : 0, u.fu_ctl[0], u.fu_ctl[1], u.fu_ctl[2]);
+            }
         }
         p += len;
     }
 
-    // A feature unit carrying a physical input into a mixer is the monitor path.
     int muted = 0;
-    for (int m = 0; ac_iface >= 0 && m < n; m++) {
-        if (units[m].subtype != UAC_MIXER_UNIT) continue;
-        for (int s = 0; s < units[m].nsrc; s++) {
-            const unit_t *fu = find_unit(units, n, units[m].src[s]);
-            if (!fu || fu->subtype != UAC_FEATURE_UNIT || !from_physical_input(units, n, fu->id)) continue;
-            esp_err_t err = ESP_ERR_NOT_SUPPORTED;
-            if (fu->fu_controls & 0x01) {
-                const uint8_t on = 1;
-                err = set_cur(dev, ac_iface, fu->id, 0x01, &on, 1);  // MUTE_CONTROL
-            }
-            if (err != ESP_OK && (fu->fu_controls & 0x02)) {
-                const uint8_t silent[2] = {0x00, 0x80};  // VOLUME_CONTROL: 0x8000 is -inf dB
-                err = set_cur(dev, ac_iface, fu->id, 0x02, silent, 2);
-            }
-            ESP_LOGI(TAG, "mic monitor (unit %u): %s", fu->id, err == ESP_OK ? "muted" : esp_err_to_name(err));
-            if (err == ESP_OK) muted++;
+    for (int i = 0; ac_iface >= 0 && i < n; i++) {
+        const unit_t *fu = &units[i];
+        if (fu->subtype != UAC_FEATURE_UNIT) continue;
+        if (!from_physical_input(units, n, fu->id) || !reaches_output(units, n, fu->id, 0)) continue;
+        ESP_LOGI(TAG, "mic monitor path: feature unit %u", fu->id);
+        muted += mute_feature_unit(dev, ac_iface, fu);
+    }
+    for (int i = 0; !muted && ac_iface >= 0 && i < n; i++) {
+        if (units[i].subtype == UAC_MIXER_UNIT && reaches_output(units, n, units[i].id, 0)) {
+            muted += mute_mixer_inputs(dev, ac_iface, units, n, &units[i]);
         }
     }
-    if (!muted) ESP_LOGI(TAG, "no mic monitor path found to mute");
+    ESP_LOGI(TAG, "mic monitor: %s", muted ? "muted" : "no control found to mute it");
     usb_host_device_close(s_client, dev);
 }
 
@@ -357,11 +451,12 @@ static void host_task(void *arg)
 
 esp_err_t usb_audio_init(void)
 {
-    s_scratch = heap_caps_malloc(SCRATCH_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    s_rx_buf = heap_caps_malloc(SCRATCH_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    s_tx_buf = heap_caps_malloc(SCRATCH_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     s_events = xQueueCreate(8, sizeof(event_t));
     s_rx.lock = xSemaphoreCreateMutex();
     s_tx.lock = xSemaphoreCreateMutex();
-    ESP_RETURN_ON_FALSE(s_scratch && s_events && s_rx.lock && s_tx.lock, ESP_ERR_NO_MEM, TAG, "alloc");
+    ESP_RETURN_ON_FALSE(s_rx_buf && s_tx_buf && s_events && s_rx.lock && s_tx.lock, ESP_ERR_NO_MEM, TAG, "alloc");
 
     // 5 V for the USB-A port comes from the PMIC through the coprocessor.
     ESP_RETURN_ON_ERROR(bsp_power_set_usb_host_boost_enabled(true), TAG, "host boost");
@@ -418,13 +513,13 @@ bool usb_audio_read(int16_t *frame)
         TickType_t end = xTaskGetTickCount() + pdMS_TO_TICKS(IO_TIMEOUT_MS);
         while (have < want && (int32_t)(end - xTaskGetTickCount()) > 0) {
             uint32_t got = 0;
-            if (uac_host_device_read(s_rx.h, (uint8_t *)s_scratch + have, want - have, &got, 20) == ESP_OK) have += got;
+            if (uac_host_device_read(s_rx.h, (uint8_t *)s_rx_buf + have, want - have, &got, 20) == ESP_OK) have += got;
         }
         if (have == want) {
             // Average each group of channels and rate-converted samples.
             for (int i = 0; i < AUDIO_FRAME; i++) {
                 int32_t sum = 0;
-                for (uint32_t k = 0; k < per; k++) sum += s_scratch[i * per + k];
+                for (uint32_t k = 0; k < per; k++) sum += s_rx_buf[i * per + k];
                 frame[i] = (int16_t)(sum / (int32_t)per);
             }
             ok = true;
@@ -448,11 +543,11 @@ bool usb_audio_write(const int16_t *frame)
             int32_t a = i ? frame[i - 1] : s_prev, b = frame[i];
             for (int k = 1; k <= mult; k++) {
                 int16_t v = (int16_t)(a + (b - a) * k / mult);
-                for (int c = 0; c < s_tx.channels; c++) s_scratch[n++] = v;
+                for (int c = 0; c < s_tx.channels; c++) s_tx_buf[n++] = v;
             }
         }
         s_prev = frame[AUDIO_FRAME - 1];
-        ok = uac_host_device_write(s_tx.h, (uint8_t *)s_scratch, n * sizeof(int16_t), IO_TIMEOUT_MS) == ESP_OK;
+        ok = uac_host_device_write(s_tx.h, (uint8_t *)s_tx_buf, n * sizeof(int16_t), IO_TIMEOUT_MS) == ESP_OK;
     }
     xSemaphoreGive(s_tx.lock);
     return ok;

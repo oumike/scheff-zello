@@ -92,6 +92,8 @@ implemented; it has not yet been through a long soak test on hardware.
   e.g. a C-Media one) into the USB-A port and it provides the mic, hot-plugged;
   its output then carries playback too. Without one the Talk button reads
   *no microphone* and you listen and send text.
+- **F1** (the X key) is push-to-talk from any screen: hold to talk, or tap to
+  toggle with the latching talk setting.
 - Without an adapter, audio is the ES8156 DAC into the speaker and the **headphone jack**. Plugging
   in headphones mutes the speaker (the coprocessor switches the amplifier);
   the volume control drives both.

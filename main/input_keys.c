@@ -189,8 +189,34 @@ static void volume_step(int delta)
     settings_save();
 }
 
+// F1 (the X key) talks from any screen: held, or toggled with ptt_latch. As
+// with the other boards' talk buttons, a press while the screen is dark only
+// wakes it, and has to be let go before it can talk.
+static void on_talk_key(bool down)
+{
+    static bool s_blocked;
+    if (down && ui_saver_key()) {
+        s_blocked = true;
+        return;
+    }
+    if (s_blocked) {
+        if (!down) s_blocked = false;
+        return;
+    }
+    ESP_LOGI(TAG, "F1 %s", down ? "pressed" : "released");
+    if (g_settings.ptt_latch) {
+        if (down) zello_set_ptt(!zello_ptt());
+    } else {
+        zello_set_ptt(down);
+    }
+}
+
 static void on_navigation(const bsp_input_event_args_navigation_t *nav)
 {
+    if (nav->key == BSP_INPUT_NAVIGATION_KEY_F1) {
+        on_talk_key(nav->state);
+        return;
+    }
     if (!nav->state) return;  // act on presses only
     switch (nav->key) {
     case BSP_INPUT_NAVIGATION_KEY_RETURN: enqueue(LV_KEY_ENTER); break;
