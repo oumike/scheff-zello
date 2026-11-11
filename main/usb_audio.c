@@ -382,7 +382,9 @@ static void connect(const event_t *e)
     uac_host_device_config_t cfg = {
         .addr = e->addr,
         .iface_num = e->iface,
-        .buffer_size = 4 * SCRATCH_BYTES,
+        // The driver's ring buffers live in internal RAM, which TLS needs too:
+        // room for one and a half of our largest frames.
+        .buffer_size = SCRATCH_BYTES * 3 / 2,
         .buffer_threshold = AUDIO_FRAME * sizeof(int16_t),
         .callback = device_cb,
     };
@@ -451,8 +453,8 @@ static void host_task(void *arg)
 
 esp_err_t usb_audio_init(void)
 {
-    s_rx_buf = heap_caps_malloc(SCRATCH_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    s_tx_buf = heap_caps_malloc(SCRATCH_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    s_rx_buf = heap_caps_malloc(SCRATCH_BYTES, MALLOC_CAP_SPIRAM);
+    s_tx_buf = heap_caps_malloc(SCRATCH_BYTES, MALLOC_CAP_SPIRAM);
     s_events = xQueueCreate(8, sizeof(event_t));
     s_rx.lock = xSemaphoreCreateMutex();
     s_tx.lock = xSemaphoreCreateMutex();
