@@ -348,7 +348,7 @@ static void refresh(lv_timer_t *t)
         snprintf(label, sizeof(label), LV_SYMBOL_VOLUME_MAX "  %s" TALK_SEP "is talking", st.talker);
         set_talk(UI_COLOR_STOP, label);
     } else if (!audio_has_mic()) {
-        set_talk(UI_COLOR_PANEL, LV_SYMBOL_VOLUME_MAX "  LISTENING" TALK_SEP "no microphone: send text");
+        set_talk(UI_COLOR_PANEL, LV_SYMBOL_VOLUME_MAX "  LISTENING" TALK_SEP "no microphone: plug in USB audio or send text");
     } else {
         set_talk(UI_COLOR_GO, g_settings.ptt_latch ? LV_SYMBOL_AUDIO "  TAP TO TALK"
                                                    : LV_SYMBOL_AUDIO "  HOLD TO TALK");

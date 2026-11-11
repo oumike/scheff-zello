@@ -41,6 +41,11 @@ dependencies:
     version: "^0.9.9"
     rules:
       - if: "$CONFIG{ZELLO_USE_BADGE_BSP} == 1"
+  # USB audio adapter (microphone and output) on the host port.
+  espressif/usb_host_uac:
+    version: "^1.5.0"
+    rules:
+      - if: "$CONFIG{ZELLO_USE_BADGE_BSP} == 1"
   nicolaielectronics/esp-wifi-remote-tanmatsu:
     version: "^1.4.2"
     rules:

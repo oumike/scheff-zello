@@ -25,8 +25,10 @@ static const char *TAG = "audio";
 // Playback and capture devices. On the P4 both are the one ES8311; on the
 // T-Deck the speaker amplifier and the ES7210 mic ADC are separate parts on
 // separate I2S ports; on the Wio Tracker L2 the ES8311 DAC and ES7243E ADC
-// share one I2S port. The Tanmatsu has no microphone: its BSP sets up the
-// ES8156 DAC, and playback goes straight to the BSP's I2S channel.
+// share one I2S port. The Tanmatsu has no microphone of its own: its BSP sets
+// up the ES8156 DAC, and playback goes straight to the BSP's I2S channel. A
+// USB audio adapter in its host port (usb_audio.c) adds a microphone and takes
+// over playback while plugged in.
 static esp_codec_dev_handle_t s_out, s_in;
 static StreamBufferHandle_t s_play;
 static audio_mic_cb_t s_mic_cb;
@@ -37,9 +39,9 @@ static volatile uint8_t s_mic_level, s_play_level;
 #if CONFIG_ZELLO_BOARD_TANMATSU
 
 #include "bsp/audio.h"
+#include "usb_audio.h"
 
 #define AUDIO_STEREO_IO 1
-#define AUDIO_NO_MIC    1
 
 static i2s_chan_handle_t s_tx;
 
@@ -58,6 +60,8 @@ static esp_err_t codec_open(void)
     // coprocessor mutes the amplifier while headphones are plugged in, as
     // long as it isn't forced on.
     bsp_audio_set_amplifier_force(false);
+    // Optional: without an adapter the board just plays through the DAC.
+    if (usb_audio_init() != ESP_OK) ESP_LOGW(TAG, "USB audio unavailable");
     return ESP_OK;
 }
 
@@ -345,6 +349,11 @@ static uint8_t peak_percent(const int16_t *pcm, size_t samples)
 static void out_write(int16_t *frame, int16_t *io)
 {
 #if CONFIG_ZELLO_BOARD_TANMATSU
+    if (usb_audio_speaker_ready()) {
+        // The adapter paces this loop; if it stalls, keep the cadence anyway.
+        if (!usb_audio_write(frame)) vTaskDelay(pdMS_TO_TICKS(AUDIO_FRAME_MS));
+        return;
+    }
     for (int i = 0; i < AUDIO_FRAME; i++) io[2 * i] = io[2 * i + 1] = frame[i];
     size_t written;
     i2s_channel_write(s_tx, io, IO_BYTES, &written, portMAX_DELAY);
@@ -359,8 +368,8 @@ static void out_write(int16_t *frame, int16_t *io)
 // Reads one mono frame, taken from MIC_SLOT on a stereo link.
 static bool in_read(int16_t *frame, int16_t *io)
 {
-#if AUDIO_NO_MIC
-    return false;
+#if CONFIG_ZELLO_BOARD_TANMATSU
+    return usb_audio_read(frame);
 #elif AUDIO_STEREO_IO
     if (esp_codec_dev_read(s_in, io, IO_BYTES) != ESP_CODEC_DEV_OK) return false;
     // The first ~3 s: each channel's loudest sample, for finding the mic.
@@ -459,7 +468,8 @@ esp_err_t audio_init(audio_mic_cb_t mic_cb)
     ESP_RETURN_ON_ERROR(codec_open(), TAG, "codec");
 
     xTaskCreate(play_task, "audio_play", 4096, NULL, 20, NULL);
-    if (audio_has_mic()) xTaskCreate(mic_task, "audio_mic", 4096, NULL, 19, NULL);
+    // The Tanmatsu's microphone can be plugged in later; the task idles until then.
+    if (audio_has_mic() || CONFIG_ZELLO_BOARD_TANMATSU) xTaskCreate(mic_task, "audio_mic", 4096, NULL, 19, NULL);
     ESP_LOGI(TAG, "audio running at %d Hz mono, %d ms frames%s", AUDIO_RATE, AUDIO_FRAME_MS,
              audio_has_mic() ? "" : ", playback only");
     return ESP_OK;
@@ -483,7 +493,11 @@ bool audio_is_playing(void)
 
 bool audio_has_mic(void)
 {
+#if CONFIG_ZELLO_BOARD_TANMATSU
+    return usb_audio_mic_ready();
+#else
     return !AUDIO_NO_MIC;
+#endif
 }
 
 void audio_set_volume(int percent)
@@ -492,6 +506,7 @@ void audio_set_volume(int percent)
     // The ES8156's lower half is near silent: map 1..100 onto 50..100, as
     // wadamesh does, so every step of the slider is audible.
     bsp_audio_set_volume(percent <= 0 ? 0.0f : 50.0f + percent * 0.5f);
+    usb_audio_set_volume(percent);
 #else
     if (s_out) esp_codec_dev_set_out_vol(s_out, percent);
 #endif

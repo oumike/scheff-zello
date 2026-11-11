@@ -24,8 +24,8 @@ void audio_play_push(const int16_t *pcm, size_t samples);
 void audio_play_flush(void);
 bool audio_is_playing(void);
 
-// False on boards without a microphone (the Tanmatsu): they listen and send
-// text, but can't talk.
+// False when there is no microphone: they listen and send text, but can't
+// talk. The Tanmatsu has one only while a USB audio adapter is plugged in.
 bool audio_has_mic(void);
 
 void audio_set_volume(int percent);

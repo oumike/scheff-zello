@@ -87,9 +87,12 @@ implemented; it has not yet been through a long soak test on hardware.
   on the home screen starts a channel message; **Enter** sends it. Arrows and
   Tab move between controls, Esc goes back, and the volume keys set the volume.
   The **Power** button is the screen button, and any key also wakes it.
-- **Listen and text only**: the Tanmatsu has no microphone, so the Talk button
-  reads *no microphone* and push-to-talk is ignored.
-- Audio is the ES8156 DAC into the speaker and the **headphone jack**. Plugging
+- **Microphone via USB**: the Tanmatsu has no microphone of its own. Plug a
+  USB audio adapter (any UAC 1.0 sound card with 16-bit PCM at 16 or 48 kHz,
+  e.g. a C-Media one) into the USB-A port and it provides the mic, hot-plugged;
+  its output then carries playback too. Without one the Talk button reads
+  *no microphone* and you listen and send text.
+- Without an adapter, audio is the ES8156 DAC into the speaker and the **headphone jack**. Plugging
   in headphones mutes the speaker (the coprocessor switches the amplifier);
   the volume control drives both.
 - Flashing this firmware **replaces the badge.team launcher** and its apps on
