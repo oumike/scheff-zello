@@ -2,8 +2,8 @@
 
 **Scheff for Zello** (`scheff-zello`) is a [Zello](https://zello.com) push-to-talk client for the **LilyGO T-Display-P4**
 (ESP32-P4 + ESP32-C6), the **LilyGO T-Deck / T-Deck Plus** (ESP32-S3), the
-**Seeed Wio Tracker L2** (ESP32-S3) and the **Nicolai Electronics Tanmatsu**
-(ESP32-P4 + ESP32-C6), built on ESP-IDF with an LVGL UI.
+**Seeed Wio Tracker L2** (ESP32-S3), the **Nicolai Electronics Tanmatsu**
+(ESP32-P4 + ESP32-C6) and the **M5Stack Tab5** (ESP32-P4 + ESP32-C6), built on ESP-IDF with an LVGL UI.
 
 It signs in to the [Zello Channels API](https://github.com/zelloptt/zello-channel-api)
 over a WebSocket, joins one channel, and carries voice both ways as Opus through
@@ -77,6 +77,25 @@ implemented; it has not yet been through a long soak test on hardware.
   boot log reports each channel's peak level.
 - The battery is read through the ADS1115 ADC; the LoRa radio and GNSS stay off.
 
+### M5Stack Tab5
+
+- ESP32-P4 (pre-rev-3.0, like the T-Display-P4) with 16 MB flash and 32 MB
+  PSRAM; Wi-Fi is its ESP32-C6 over ESP-Hosted, so the C6 must run slave
+  firmware matching `third_party/esp_hosted` (v2.12.x). The C6 is
+  power-cycled through the IO expander at boot.
+- The 5" 720x1280 MIPI-DSI screen in portrait. Both panel variants are
+  detected at boot from the touch controller: ST7123 (current) or ILI9881C
+  with GT911 touch (early units). There is no keyboard; text is typed on the
+  on-screen keyboard, with the T-Display-P4's layout.
+- Push-to-talk is the **Talk button** on screen. The Tab5 has no button the
+  firmware can read, so **touching the screensaver** stands in for the screen
+  button: a tap relights a dark screen, a 2 s hold wakes it.
+- Audio is the ES8388 DAC into the speaker amplifier and the ES7210 microphone
+  ADC, sharing one I2S port. Which ES7210 channel carries the microphone is
+  not confirmed yet: `MIC_SLOT` in `main/audio.c` averages both.
+- The battery is read through the INA226 monitor (2S pack). The Tab5 port
+  has not yet been tested on hardware.
+
 ### Nicolai Electronics Tanmatsu
 
 - ESP32-P4 with 16 MB flash and 32 MB PSRAM, Wi-Fi on its ESP32-C6 over
@@ -120,6 +139,7 @@ PlatformIO fetches and manages ESP-IDF itself; no separate install is needed.
 ./scripts/build-upload-monitor.sh --tdeck    # T-Deck: build, flash, then monitor
 ./scripts/build-upload-monitor.sh --wio-tracker-l2   # Wio Tracker L2
 ./scripts/build-upload-monitor.sh --tanmatsu # Tanmatsu (replaces the launcher)
+./scripts/build-upload-monitor.sh --tab5     # M5Stack Tab5
 ./scripts/build-upload-monitor.sh -B         # compile only, no device needed
 ./scripts/build-upload-monitor.sh --port /dev/cu.usbmodem1101
 ./scripts/build-upload-monitor.sh -E         # erase flash first (wipes settings)
@@ -136,7 +156,8 @@ Host-side correctness regressions run with `python3 -m unittest discover -s test
 no device is accessed).
 
 The T-Display-P4 is the default board; `--tdeck` selects the T-Deck,
-`--wio-tracker-l2` the Wio Tracker L2 and `--tanmatsu` the Tanmatsu. Each board
+`--wio-tracker-l2` the Wio Tracker L2, `--tanmatsu` the Tanmatsu and `--tab5`
+the Tab5. Each board
 builds into its own directory. Add `--fullclean` (`-F`) the first time you build
 a board, after switching boards, and after changing memory settings in the
 `sdkconfig.defaults*` files: PlatformIO otherwise keeps a stale generated linker
@@ -146,7 +167,8 @@ Settings shared by every board are in `sdkconfig.defaults`; ESP-IDF layers
 `sdkconfig.defaults.esp32p4` or `sdkconfig.defaults.esp32s3` on top for the chip
 being built. Boards on the same chip are told apart by the "Board" choice in
 `main/Kconfig.projbuild`; the Wio build selects it in `sdkconfig.pio.wio.defaults`
-and the Tanmatsu build in `sdkconfig.pio.tanmatsu.defaults`.
+the Tanmatsu build in `sdkconfig.pio.tanmatsu.defaults` and the Tab5 build in
+`sdkconfig.pio.tab5.defaults`.
 
 The script runs `pio` against a separate core directory (`~/.platformio-p4`), so
 the pioarduino platform this project needs cannot be replaced by the
@@ -233,7 +255,7 @@ The home screen is also the talk screen:
   activity*. An incoming text message also beeps.
 - **Text messages** go to the channel from the *Message the channel* field under the
   activity panel: type, then **Send** (or Enter). On the touch-only boards
-  (T-Display-P4, Wio Tracker L2) tapping the field opens the on-screen keyboard,
+  (T-Display-P4, Wio Tracker L2, Tab5) tapping the field opens the on-screen keyboard,
   which hides the talk controls until it closes; on the T-Deck and Tanmatsu just
   start typing on the home screen (on the T-Deck a leading Space still talks). The browser's *Channel activity* can send
   them too.
@@ -251,7 +273,7 @@ lines). Audio keeps playing. After 10 more minutes the screen goes dark.
 - Push-to-talk is ignored while the screensaver is up or the screen is dark.
 - The screen button is **BOOT** on the T-Display-P4, **Wake** on the Wio
   Tracker L2 and **Power** on the Tanmatsu; the T-Deck uses a held trackball
-  click (or any key to wake).
+  click (or any key to wake), and the Tab5 a touch on the screensaver.
 
 ## Backup and restore
 

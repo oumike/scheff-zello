@@ -61,7 +61,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        env: [ tdisplay-p4, tdeck, wio-tracker-l2, tanmatsu ]
+        env: [ tdisplay-p4, tdeck, wio-tracker-l2, tanmatsu, tab5 ]
     steps:
       - uses: actions/checkout@v4
 

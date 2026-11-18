@@ -7,5 +7,6 @@
     "name": "Nicolai Electronics Tanmatsu",
     "chip": "ESP32-P4",
     "note": "Replaces the launcher (restore it at recovery.tanmatsu.cloud). It shows two ports; if the flasher finds an ESP32-C6, connect again and pick the other one."
-  }
+  },
+  { "env": "tab5", "name": "M5Stack Tab5", "chip": "ESP32-P4" }
 ]

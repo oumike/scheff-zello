@@ -35,6 +35,9 @@ static const char *TAG = "crash";
 #elif CONFIG_ZELLO_BOARD_TANMATSU
 #define RING_SIZE (16 * 1024)
 #define BOARD_NAME "Nicolai Electronics Tanmatsu"
+#elif CONFIG_ZELLO_BOARD_TAB5
+#define RING_SIZE (16 * 1024)
+#define BOARD_NAME "M5Stack Tab5"
 #elif CONFIG_ZELLO_BOARD_WIO_TRACKER_L2
 #define RING_SIZE (6 * 1024)
 #define BOARD_NAME "Seeed Wio Tracker L2"

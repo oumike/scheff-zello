@@ -1,0 +1,26 @@
+# M5Stack Tab5 (ESP32-P4 + ESP32-C6). Layered by platformio.ini on
+# sdkconfig.defaults, sdkconfig.pio.defaults and sdkconfig.pio.p4.defaults (the
+# chip revision: the Tab5 carries pre rev 3.0 silicon); ESP-IDF adds
+# sdkconfig.defaults.esp32p4 (PSRAM, caches) on its own. Pins and settings
+# follow M5Stack's Tab5 BSP, M5Unified, OrcSDR and monster-cyberspace.
+CONFIG_ZELLO_BOARD_TAB5=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# Wi-Fi on the C6 over ESP-Hosted SDIO, slot 1 through the GPIO matrix. GPIO15
+# is the C6's reset line, which ESP-Hosted drives itself; main/board.c also
+# switches the C6's power through the IO expander before Wi-Fi starts.
+CONFIG_SLAVE_IDF_TARGET_ESP32C6=y
+CONFIG_ESP_HOSTED_CP_TARGET_ESP32C6=y
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_CLK_SLOT_1=12
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_CMD_SLOT_1=13
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D0_SLOT_1=11
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D1_4BIT_BUS_SLOT_1=10
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D2_4BIT_BUS_SLOT_1=9
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D3_4BIT_BUS_SLOT_1=8
+CONFIG_ESP_HOSTED_SDIO_GPIO_RESET_SLAVE=15
+CONFIG_ESP_HOSTED_SDIO_RESET_ACTIVE_HIGH=y
+# OrcSDR found the Tab5's SDIO link unreliable under sustained TLS above this.
+CONFIG_ESP_HOSTED_SDIO_CLOCK_FREQ_KHZ=10000
+CONFIG_ESP_HOSTED_SLAVE_RESET_ONLY_IF_NECESSARY=y
+CONFIG_ESP_HOSTED_HOST_RESTART_NO_COMMUNICATION_WITH_SLAVE=n

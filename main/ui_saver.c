@@ -252,6 +252,16 @@ bool ui_saver_key(void)
 
 // ---- the screen button -----------------------------------------------------
 
+#if CONFIG_ZELLO_BOARD_TAB5
+static lv_indev_t *touch_indev(void)
+{
+    for (lv_indev_t *i = lv_indev_get_next(NULL); i; i = lv_indev_get_next(i)) {
+        if (lv_indev_get_type(i) == LV_INDEV_TYPE_POINTER) return i;
+    }
+    return NULL;
+}
+#endif
+
 static bool button_down(void)
 {
 #if CONFIG_ZELLO_BOARD_TDISPLAY_P4
@@ -264,6 +274,11 @@ static bool button_down(void)
     return pressed;
 #elif CONFIG_ZELLO_BOARD_TDECK
     return gpio_get_level(BOARD_TBALL_CLICK) == 0;
+#elif CONFIG_ZELLO_BOARD_TAB5
+    // No readable button: a touch on the screensaver stands in for one, so a
+    // tap relights a dark screen and a 2 s hold wakes it.
+    lv_indev_t *touch = touch_indev();
+    return s_state != SAVER_OFF && touch && lv_indev_get_state(touch) == LV_INDEV_STATE_PRESSED;
 #else
     return false;
 #endif
@@ -284,6 +299,10 @@ static void button_hold(void)
 {
     if (s_state != SAVER_OFF) {
         wake("button held");
+#if CONFIG_ZELLO_BOARD_TAB5
+        // The finger that woke it is still down: don't let it press the UI.
+        lv_indev_wait_release(touch_indev());
+#endif
         return;
     }
 #if CONFIG_ZELLO_BOARD_TDECK

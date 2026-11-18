@@ -19,6 +19,10 @@
 #include "freertos/task.h"
 #include "esp_hosted.h"
 #include "bsp/power.h"
+#elif CONFIG_ZELLO_BOARD_TAB5
+#include "freertos/task.h"
+#include "esp_hosted.h"
+#include "board.h"
 #endif
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -140,6 +144,13 @@ esp_err_t net_wifi_init(void)
         }
     }
     ESP_RETURN_ON_FALSE(rc == 0, ESP_FAIL, TAG, "no link to the C6 radio");
+#elif CONFIG_ZELLO_BOARD_TAB5
+    // The C6 off and on through the expander, so it starts fresh with the
+    // host, as M5Unified does; ESP-Hosted then resets it on GPIO15 itself.
+    ESP_RETURN_ON_ERROR(board_c6_power(false), TAG, "c6 power");
+    vTaskDelay(pdMS_TO_TICKS(100));
+    ESP_RETURN_ON_ERROR(board_c6_power(true), TAG, "c6 power");
+    ESP_RETURN_ON_ERROR(esp_hosted_init(), TAG, "esp_hosted_init");
 #endif
 
     ESP_RETURN_ON_ERROR(esp_netif_init(), TAG, "netif");

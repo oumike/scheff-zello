@@ -4,8 +4,10 @@
 // trackball) and the Seeed Wio Tracker L2 (the S3's own Wi-Fi, ES8311 DAC and
 // ES7243E mic ADC, touch only) and the Nicolai Electronics Tanmatsu (Wi-Fi
 // through its ESP32-C6, the ES8156 DAC to speaker or headphones, a keyboard,
-// no microphone): the Zello Channels API over a WebSocket, Opus voice, channel
-// text messages, and an LVGL UI backed by a browser-based config.
+// no microphone) and the M5Stack Tab5 (Wi-Fi through its ESP32-C6, the ES8388
+// DAC and ES7210 mic ADC, touch only): the Zello Channels API over a
+// WebSocket, Opus voice, channel text messages, and an LVGL UI backed by a
+// browser-based config.
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"

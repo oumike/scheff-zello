@@ -22,11 +22,11 @@ static const char *TAG = "audio";
 #define PLAY_START_BYTES  (2 * AUDIO_FRAME * sizeof(int16_t))
 #define PLAY_START_TIMEOUT_MS 120
 
-// Playback and capture devices. On the P4 both are the one ES8311; on the
-// T-Deck the speaker amplifier and the ES7210 mic ADC are separate parts on
-// separate I2S ports; on the Wio Tracker L2 the ES8311 DAC and ES7243E ADC
-// share one I2S port. The Tanmatsu has no microphone of its own: its BSP sets
-// up the ES8156 DAC, and playback goes straight to the BSP's I2S channel. A
+// Playback and capture devices. On the T-Display-P4 both are the one ES8311;
+// on the T-Deck the speaker amplifier and the ES7210 mic ADC are separate
+// parts on separate I2S ports; on the Wio Tracker L2 the ES8311 DAC and
+// ES7243E ADC share one I2S port, as do the Tab5's ES8388 DAC and ES7210 ADC.
+// The Tanmatsu has no microphone of its own: its BSP sets up the ES8156 DAC, and playback goes straight to the BSP's I2S channel. A
 // USB audio adapter in its host port (usb_audio.c) adds a microphone and takes
 // over playback while plugged in.
 static esp_codec_dev_handle_t s_out, s_in;
@@ -212,6 +212,83 @@ static esp_err_t codec_open(void)
     esp_codec_dev_vol_map_t vol_map[] = {{.vol = 0, .db_value = -50.0}, {.vol = 100, .db_value = WIO_MAX_VOL_DB}};
     esp_codec_dev_vol_curve_t curve = {.vol_map = vol_map, .count = 2};
     esp_codec_dev_set_vol_curve(s_out, &curve);
+    return ESP_OK;
+}
+
+#elif CONFIG_ZELLO_BOARD_TAB5
+
+// The ES8388 DAC and ES7210 ADC share I2S0's clocks, as on the Wio Tracker
+// L2: both run stereo, and the tasks below convert to and from the app's mono
+// frames. With two inputs selected the ES7210 stays in plain I2S (not TDM),
+// as M5Unified runs it.
+#define AUDIO_STEREO_IO 1
+
+// Which ES7210 channel(s) carry the microphone: 0 left (MIC1), 1 right (MIC2),
+// -1 the average of both (not yet confirmed on hardware).
+#define MIC_SLOT (-1)
+
+static esp_err_t codec_open(void)
+{
+    i2s_chan_handle_t tx, rx;
+    i2s_chan_config_t chan = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+    chan.auto_clear = true;
+    ESP_RETURN_ON_ERROR(i2s_new_channel(&chan, &tx, &rx), TAG, "i2s channel");
+
+    i2s_std_config_t std = {
+        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(AUDIO_RATE),
+        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
+        .gpio_cfg = {
+            .mclk = BOARD_I2S_MCLK,
+            .bclk = BOARD_I2S_BCLK,
+            .ws = BOARD_I2S_WS,
+            .dout = BOARD_I2S_DOUT,
+            .din = BOARD_I2S_DIN,
+        },
+    };
+    std.clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_256;
+    ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(tx, &std), TAG, "i2s tx");
+    ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(rx, &std), TAG, "i2s rx");
+
+    audio_codec_i2s_cfg_t i2s_cfg = {.port = I2S_NUM_0, .rx_handle = rx, .tx_handle = tx};
+    const audio_codec_data_if_t *data_if = audio_codec_new_i2s_data(&i2s_cfg);
+    // esp_codec_dev takes 8-bit addresses.
+    audio_codec_i2c_cfg_t dac_i2c = {.port = 0, .addr = BOARD_ES8388_ADDR << 1, .bus_handle = board_codec_i2c_bus()};
+    audio_codec_i2c_cfg_t adc_i2c = {.port = 0, .addr = BOARD_ES7210_ADDR << 1, .bus_handle = board_codec_i2c_bus()};
+    const audio_codec_ctrl_if_t *dac_ctrl = audio_codec_new_i2c_ctrl(&dac_i2c);
+    const audio_codec_ctrl_if_t *adc_ctrl = audio_codec_new_i2c_ctrl(&adc_i2c);
+    const audio_codec_gpio_if_t *gpio_if = audio_codec_new_gpio();
+    ESP_RETURN_ON_FALSE(data_if && dac_ctrl && adc_ctrl && gpio_if, ESP_FAIL, TAG, "codec interfaces");
+
+    es8388_codec_cfg_t dac_cfg = {
+        .ctrl_if = dac_ctrl,
+        .gpio_if = gpio_if,
+        .codec_mode = ESP_CODEC_DEV_WORK_MODE_DAC,
+        .pa_pin = -1,  // the NS4150B is on the expander: board_audio_power()
+        .hw_gain = {.pa_voltage = 5.0, .codec_dac_voltage = 3.3},
+    };
+    const audio_codec_if_t *dac_if = es8388_codec_new(&dac_cfg);
+    ESP_RETURN_ON_FALSE(dac_if, ESP_FAIL, TAG, "es8388");
+    es7210_codec_cfg_t adc_cfg = {
+        .ctrl_if = adc_ctrl,
+        .mic_selected = ES7210_SEL_MIC1 | ES7210_SEL_MIC2,
+    };
+    const audio_codec_if_t *adc_if = es7210_codec_new(&adc_cfg);
+    ESP_RETURN_ON_FALSE(adc_if, ESP_FAIL, TAG, "es7210");
+
+    esp_codec_dev_cfg_t out_cfg = {.dev_type = ESP_CODEC_DEV_TYPE_OUT, .codec_if = dac_if, .data_if = data_if};
+    esp_codec_dev_cfg_t in_cfg = {.dev_type = ESP_CODEC_DEV_TYPE_IN, .codec_if = adc_if, .data_if = data_if};
+    s_out = esp_codec_dev_new(&out_cfg);
+    s_in = esp_codec_dev_new(&in_cfg);
+    ESP_RETURN_ON_FALSE(s_out && s_in, ESP_FAIL, TAG, "codec devs");
+
+    esp_codec_dev_sample_info_t fs = {
+        .bits_per_sample = 16,
+        .channel = 2,
+        .sample_rate = AUDIO_RATE,
+        .mclk_multiple = 256,
+    };
+    ESP_RETURN_ON_FALSE(esp_codec_dev_open(s_out, &fs) == ESP_CODEC_DEV_OK, ESP_FAIL, TAG, "dac open");
+    ESP_RETURN_ON_FALSE(esp_codec_dev_open(s_in, &fs) == ESP_CODEC_DEV_OK, ESP_FAIL, TAG, "adc open");
     return ESP_OK;
 }
 

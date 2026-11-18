@@ -5,14 +5,18 @@ menu "Zello Client"
         default ZELLO_BOARD_TDISPLAY_P4 if IDF_TARGET_ESP32P4
         default ZELLO_BOARD_TDECK
         help
-            The board to build for: the T-Display-P4 or the Tanmatsu on the
-            ESP32-P4, the T-Deck or the Wio Tracker L2 on the ESP32-S3.
+            The board to build for: the T-Display-P4, the Tanmatsu or the
+            M5Stack Tab5 on the ESP32-P4, the T-Deck or the Wio Tracker L2 on
+            the ESP32-S3.
 
         config ZELLO_BOARD_TDISPLAY_P4
             bool "LilyGO T-Display-P4"
             depends on IDF_TARGET_ESP32P4
         config ZELLO_BOARD_TANMATSU
             bool "Nicolai Electronics Tanmatsu"
+            depends on IDF_TARGET_ESP32P4
+        config ZELLO_BOARD_TAB5
+            bool "M5Stack Tab5"
             depends on IDF_TARGET_ESP32P4
         config ZELLO_BOARD_TDECK
             bool "LilyGO T-Deck / T-Deck Plus"
