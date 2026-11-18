@@ -546,7 +546,12 @@ esp_err_t audio_init(audio_mic_cb_t mic_cb)
 
     xTaskCreate(play_task, "audio_play", 4096, NULL, 20, NULL);
     // The Tanmatsu's microphone can be plugged in later; the task idles until then.
-    if (audio_has_mic() || CONFIG_ZELLO_BOARD_TANMATSU) xTaskCreate(mic_task, "audio_mic", 4096, NULL, 19, NULL);
+#if CONFIG_ZELLO_BOARD_TANMATSU
+    const bool mic_hotplug = true;
+#else
+    const bool mic_hotplug = false;
+#endif
+    if (audio_has_mic() || mic_hotplug) xTaskCreate(mic_task, "audio_mic", 4096, NULL, 19, NULL);
     ESP_LOGI(TAG, "audio running at %d Hz mono, %d ms frames%s", AUDIO_RATE, AUDIO_FRAME_MS,
              audio_has_mic() ? "" : ", playback only");
     return ESP_OK;

@@ -231,7 +231,13 @@ static void on_navigation(const bsp_input_event_args_navigation_t *nav)
         // Tab also arrives as a '\t' character, which isn't passed on.
         enqueue(nav->modifiers & BSP_INPUT_MODIFIER_SHIFT ? LV_KEY_PREV : LV_KEY_NEXT);
         break;
+    case BSP_INPUT_NAVIGATION_KEY_F2:
+        // To the message field, when the talk screen is in front.
+        if (s_compose && lv_screen_active() == s_talk_screen) input_keys_focus(s_compose);
+        break;
+    case BSP_INPUT_NAVIGATION_KEY_F6:
     case BSP_INPUT_NAVIGATION_KEY_VOLUME_UP: volume_step(VOLUME_STEP); break;
+    case BSP_INPUT_NAVIGATION_KEY_F5:
     case BSP_INPUT_NAVIGATION_KEY_VOLUME_DOWN: volume_step(-VOLUME_STEP); break;
     // Backspace and the space bar also arrive as characters, handled there.
     default: break;
@@ -295,10 +301,30 @@ static void route_to_compose(uint32_t key)
 }
 
 // Each queued key goes to LVGL as a press, then a release on the next read.
+// DEBUG: abort (core dump) when the LVGL loop stalls, to see where it hangs.
+static volatile uint32_t s_ui_beat;
+static void ui_stall_task(void *arg)
+{
+    uint32_t last = s_ui_beat;
+    int stalled = 0;
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        if (s_ui_beat != last) {
+            last = s_ui_beat;
+            stalled = 0;
+        } else if (++stalled == 8) {
+            ESP_LOGE(TAG, "UI stalled for 8 s: aborting for a core dump");
+            abort();
+        }
+    }
+}
+
 static void keypad_read(lv_indev_t *indev, lv_indev_data_t *data)
 {
     static uint32_t last_key;
     static bool release_pending;
+
+    s_ui_beat++;
 
     if (release_pending) {
         release_pending = false;
@@ -449,6 +475,7 @@ esp_err_t input_keys_init(void)
     lv_indev_set_group(kp, s_group);
     lv_timer_create(focus_refresh, FOCUS_REFRESH_MS, NULL);
     display_unlock();
+    xTaskCreate(ui_stall_task, "ui_stall", 3072, NULL, 5, NULL);
 
     ESP_LOGI(TAG, "keyboard ready");
     return ESP_OK;
