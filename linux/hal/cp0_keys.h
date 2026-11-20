@@ -2,8 +2,8 @@
 
 // The CardputerZero's keyboard after its keymap: characters (ASCII), the
 // navigation keys below, and the space bar as a press and a release so it can
-// be held to talk. Brightness keys are handled in the HAL; holding Esc for a
-// second quits the app.
+// be held to talk. Brightness keys are handled in the HAL; holding Esc for
+// 3 seconds quits the app.
 
 #include <stdbool.h>
 #include <stdint.h>

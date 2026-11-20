@@ -129,9 +129,9 @@ implemented; it has not yet been through a long soak test on hardware.
 - Keys: **hold Space** to talk on the home screen (or tap to toggle with the
   latching talk setting). The fn
   layer gives arrows (fn+F/X/Z/C), volume (fn+S/D) and brightness (fn+U/I).
-  Tap **Esc** to go back; **hold Esc** for 1 s to quit.
+  Tap **Esc** to go back; **hold Esc** for 3 s to quit.
 - Wi-Fi belongs to the OS: connect in the system settings, and the app signs
-  in once the network is up. The web config is served on port **8080** of the
+  in once the network is up. The web config is served on port **8960** of the
   device's address.
 - Audio goes through SDL to the system's default devices, so a USB headset
   with a microphone works and can be plugged in while the app runs.

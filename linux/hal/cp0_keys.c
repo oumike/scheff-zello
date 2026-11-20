@@ -45,7 +45,7 @@ enum {
 
 #define REPEAT_DELAY_MS 500
 #define REPEAT_MS       70
-#define QUIT_HOLD_MS    1000
+#define QUIT_HOLD_MS    3000
 #define MOD_SHIFT 1
 #define MOD_FN    2
 

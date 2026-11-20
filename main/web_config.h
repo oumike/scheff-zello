@@ -13,7 +13,7 @@
 // available there. Call after net_wifi_init().
 // The CardputerZero runs the app as a normal user, who can't listen on 80.
 #if CONFIG_ZELLO_BOARD_CARDPUTER_ZERO
-#define WEB_CONFIG_PORT 8080
+#define WEB_CONFIG_PORT 8960
 #else
 #define WEB_CONFIG_PORT 80
 #endif
