@@ -93,8 +93,7 @@ implemented; it has not yet been through a long soak test on hardware.
 - Audio is the ES8388 DAC into the speaker amplifier and the ES7210 microphone
   ADC, sharing one I2S port. Which ES7210 channel carries the microphone is
   not confirmed yet: `MIC_SLOT` in `main/audio.c` averages both.
-- The battery is read through the INA226 monitor (2S pack). The Tab5 port
-  has not yet been tested on hardware.
+- The battery is read through the INA226 monitor (2S pack).
 
 ### Nicolai Electronics Tanmatsu
 
