@@ -202,13 +202,30 @@ function showNetworkFields(){
   $('workwrap').style.display=work?'block':'none';
 }
 $('network').onchange=showNetworkFields;
+// The CardputerZero's OS owns its Wi-Fi, and its backups live in a folder.
+let osWifi=false,sdOn='on the SD card',sdFrom='from the SD card',deviceApplied=false;
+function applyDevice(d){
+  if(deviceApplied)return;
+  deviceApplied=true;
+  osWifi=!!d.os_wifi;sdOn=d.storage_on||sdOn;sdFrom=d.storage_from||sdFrom;
+  if(osWifi){
+    $('s-wifi').hidden=true;
+    document.querySelectorAll('.step').forEach(e=>{const n=+e.textContent;if(n>1)e.textContent=n-1});
+    document.querySelector('.sub').textContent='Set up your Zello account and a channel. The device screen follows along.';
+  }
+  if(!d.crash_reports)$('s-crash').hidden=true;
+  $('sdx').textContent='Export '+sdOn.replace(/^on /,'to ').replace(/^in /,'to ');
+  $('sdi').textContent='Import '+sdFrom;
+}
 async function refresh(){
   const observed={...revision};
   let s;
   try{s=await api('/api/status')}catch(e){$('status').textContent='Device not reachable - it may be switching networks. Retrying…';return}
   const w=s.wifi,a=s.account,z=s.zello;
+  if(s.device)applyDevice(s.device);
   $('status').innerHTML=
-    row('Wi-Fi',w.connected?esc(w.ssid)+' ('+esc(w.ip)+')':(w.ssid?'connecting to '+esc(w.ssid)+'…':'not set up'))+
+    (osWifi?row('Network',w.connected?esc(w.ip):'not connected'):
+     row('Wi-Fi',w.connected?esc(w.ssid)+' ('+esc(w.ip)+')':(w.ssid?'connecting to '+esc(w.ssid)+'…':'not set up')))+
     row('Account',a.username?esc(a.username)+' on '+(a.network==='work'?'Zello Work':'zello.io'):'not set')+
     row('Zello',ZSTATE[z.state]+(z.error&&z.state!=='online'?' - '+esc(z.error):''))+
     row('Channel',z.channel?esc(z.channel)+(z.state==='online'?' ('+z.users_online+' listening)':''):'none')+
@@ -432,16 +449,16 @@ $('upfile').onchange=async e=>{
   finally{saving=false;saveButton()}
 };
 $('sdx').onclick=async()=>{
-  msg($('bmsg'),'busy','Writing to the SD card…');
-  try{const j=await api('/api/sd/export',{});msg($('bmsg'),'ok','Exported all settings and '+j.count+' channels to '+j.path+' on the SD card.')}
+  msg($('bmsg'),'busy','Writing the backup…');
+  try{const j=await api('/api/sd/export',{});msg($('bmsg'),'ok','Exported all settings and '+j.count+' channels to '+j.path+' '+sdOn+'.')}
   catch(e){msg($('bmsg'),'err',e.message)}
 };
 $('sdi').onclick=async()=>{
-  if(saving||!confirm('Restore settings and replace the channel list from the SD card backup?'))return;
+  if(saving||!confirm('Restore settings and replace the channel list with the backup '+sdFrom+'?'))return;
   const submitted={...revision};saving=true;saveButton();
-  msg($('bmsg'),'busy','Reading the SD card…');
+  msg($('bmsg'),'busy','Reading the backup…');
   try{const j=await api('/api/sd/import',{});
-    const done=restored(j,' from the SD card');
+    const done=restored(j,' '+sdFrom);
     msg($('bmsg'),'ok',done+(j.reconnecting?' The device is reconnecting to the restored Wi-Fi network.':''));
     applyImport(j,submitted)}
   catch(e){msg($('bmsg'),'err',e.message)}

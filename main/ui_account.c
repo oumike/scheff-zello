@@ -8,6 +8,7 @@
 #include "audio.h"
 #include "net_wifi.h"
 #include "onboard.h"
+#include "sdcard.h"
 #include "settings.h"
 #include "ui_internal.h"
 
@@ -138,6 +139,10 @@ static void continue_clicked(lv_event_t *e)
 // if the join works. A failed join keeps the old network and this screen.
 static void save_clicked(lv_event_t *e)
 {
+    if (UI_OS_WIFI) {
+        if (save_account()) close_settings();
+        return;
+    }
     const char *ssid = lv_textarea_get_text(s_wifi_ssid);
     const char *pass = lv_textarea_get_text(s_wifi_pass);
     if (!ssid[0]) {
@@ -277,6 +282,16 @@ static void build_audio_fields(lv_obj_t *col)
 static void build_wifi_fields(lv_obj_t *col, lv_obj_t *kb)
 {
     char ip[16], status[96];
+    if (UI_OS_WIFI) {
+        // The OS joins networks; this only says whether there is one.
+        if (net_wifi_sta_ip(ip, sizeof(ip))) {
+            snprintf(status, sizeof(status), LV_SYMBOL_WIFI "  Connected (%s)", ip);
+        } else {
+            snprintf(status, sizeof(status), LV_SYMBOL_WIFI "  Not connected: join a network in the system settings");
+        }
+        ui_label(col, status, UI_FONT_SMALL, UI_COLOR_MUTED);
+        return;
+    }
     if (net_wifi_sta_ip(ip, sizeof(ip))) {
         snprintf(status, sizeof(status), LV_SYMBOL_WIFI "  Connected to \"%s\" (%s)", g_settings.wifi_ssid, ip);
     } else {
@@ -322,11 +337,14 @@ void ui_account_edit(void)
     s_onboarding = false;
 
     ui_title(col, "Settings");
-    ui_label(col, "Wi-Fi", UI_FONT, UI_COLOR_ACCENT);
+    ui_label(col, UI_OS_WIFI ? "Network" : "Wi-Fi", UI_FONT, UI_COLOR_ACCENT);
     build_wifi_fields(col, kb);
     ui_label(col, "Zello account", UI_FONT, UI_COLOR_ACCENT);
     build_fields(col, kb);
-    ui_label(col, "The account applies right away. A new Wi-Fi network is tried first, then the device restarts on it.",
+    ui_label(col,
+             UI_OS_WIFI ? "The account applies right away."
+                        : "The account applies right away. A new Wi-Fi network is tried first, then the device "
+                          "restarts on it.",
              UI_FONT_SMALL, UI_COLOR_MUTED);
     ui_label(col, "Microphone gain", UI_FONT, UI_COLOR_ACCENT);
     build_audio_fields(col);
@@ -334,8 +352,13 @@ void ui_account_edit(void)
     ui_label(col, "Backup", UI_FONT, UI_COLOR_ACCENT);
     button_pair(col, backup_button);
     ui_label(col,
+#if CONFIG_ZELLO_BOARD_CARDPUTER_ZERO
+             "The account, the channels and every setting, to scheff-zello-backup.yaml " SDCARD_ON
+             ". Restore reads the newest backup there and replaces them.",
+#else
              "Wi-Fi, the account, the channels and every setting, to scheff-zello-backup.yaml on the microSD "
              "card. Restore reads the newest backup there and replaces them.",
+#endif
              UI_FONT_SMALL, UI_COLOR_MUTED);
     ui_spacer(col);
 #if UI_LANDSCAPE

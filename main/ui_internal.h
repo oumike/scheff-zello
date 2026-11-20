@@ -12,7 +12,40 @@
 #include "net_wifi.h"
 #include "zello_client.h"
 
-#if CONFIG_ZELLO_BOARD_TANMATSU
+#if CONFIG_ZELLO_BOARD_CARDPUTER_ZERO
+
+// CardputerZero: a 320x170 LCD (316x168 inside the bezel) above a keyboard.
+// The T-Deck's landscape layout and fonts, tightened for 70 fewer rows.
+#define UI_PAD    3
+#define UI_GAP    2
+#define UI_BTN_H  22
+#define UI_FIELD_H 22
+#define UI_RADIUS 4
+#define UI_SAFE_TOP    0
+#define UI_SAFE_BOTTOM 0
+
+#define UI_FONT_SMALL (&lv_font_montserrat_12)
+#define UI_FONT       (&lv_font_montserrat_14)
+#define UI_FONT_TITLE (&lv_font_montserrat_16)
+#define UI_STATUS_BAR_W     100
+#define UI_STATUS_BAR_H     16
+#define UI_SPINNER_SIZE     24
+#define UI_ICON_BUTTON_SIZE 20
+#define UI_EDIT_BUTTON_H    18
+#define UI_CLEAR_BUTTON_W   22
+#define UI_TALK_BUTTON_H    26
+#define UI_SLIDER_H         6
+#define UI_VOLUME_VALUE_W   34
+#define UI_VOLUME_PAD       2
+#define UI_METER_H          4
+#define UI_ZELLO_ICON_DIV   2
+
+#define UI_LANDSCAPE    1
+#define UI_HAS_KEYBOARD 1
+// The OS joins Wi-Fi networks; the app only uses the connection.
+#define UI_OS_WIFI      1
+
+#elif CONFIG_ZELLO_BOARD_TANMATSU
 
 // Tanmatsu: an 800x480 LCD (turned to landscape) above a full keyboard, so
 // the home screen is the T-Deck's landscape layout at about two and a half
@@ -131,6 +164,9 @@
 
 #endif
 
+#ifndef UI_OS_WIFI
+#define UI_OS_WIFI 0
+#endif
 #ifndef UI_VOLUME_VERTICAL
 #define UI_VOLUME_VERTICAL 0
 #endif

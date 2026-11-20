@@ -9,6 +9,7 @@
 #include "display.h"
 #include "net_wifi.h"
 #include "onboard.h"
+#include "sdcard.h"
 #include "settings.h"
 #include "ui_internal.h"
 #include "web_config.h"
@@ -467,7 +468,11 @@ void ui_web_hint_update(lv_obj_t *label)
                               "then open http://192.168.4.1",
                               net_wifi_ap_ssid());
     } else if (sta) {
+#if WEB_CONFIG_PORT != 80
+        lv_label_set_text_fmt(label, LV_SYMBOL_SETTINGS " Web config: http://%s:%d", ip, WEB_CONFIG_PORT);
+#else
         lv_label_set_text_fmt(label, LV_SYMBOL_SETTINGS " Web config: http://%s", ip);
+#endif
     } else {
         lv_label_set_text(label, "");
     }
@@ -554,7 +559,7 @@ static void backup_scan_task(void *arg)
     time_t mtime;
     if (!web_config_sd_backup_find(s_backup_name, sizeof(s_backup_name), &mtime)) {
         if (arg && display_lock()) {
-            ui_modal_message("No backup found. Insert the microSD card holding scheff-zello-backup.yaml.",
+            ui_modal_message(SDCARD_NOT_FOUND_HINT,
                              UI_COLOR_WARN, true, NULL);
             display_unlock();
         }
@@ -566,7 +571,7 @@ static void backup_scan_task(void *arg)
     char when[40] = "";
     // FAT keeps the time the device's clock said; before SNTP that's 1980.
     if (mtime > 1577836800 && localtime_r(&mtime, &tm)) strftime(when, sizeof(when), "\nsaved %Y-%m-%d %H:%M", &tm);
-    snprintf(title, sizeof(title), "Restore from the SD card?\n%s%s", s_backup_name, when);
+    snprintf(title, sizeof(title), "Restore " SDCARD_FROM "?\n%s%s", s_backup_name, when);
     ESP_LOGI(TAG, "offering backup %s", s_backup_name);
 
     static const char *const items[] = {"Import backup"};
@@ -580,7 +585,7 @@ static void backup_scan_task(void *arg)
 void ui_backup_restore(void (*done)(void))
 {
     s_backup_done = done;
-    ui_modal_busy("Looking on the SD card...");
+    ui_modal_busy(SDCARD_LOOKING);
     ui_run_async("backup_scan", backup_scan_task, (void *)1);
 }
 

@@ -1,0 +1,14 @@
+# The desktop session's menu entry: opens Scheff Zello in a window. Installed
+# to /usr/share/scheff-zello/; the app copies it to
+# ~/.local/share/applications at each start. TryExec hides it once the
+# package is removed.
+[Desktop Entry]
+Name=Scheff Zello
+Comment=Zello push-to-talk
+TryExec=/usr/share/APPLaunch/bin/scheff-zello
+Exec=/usr/share/APPLaunch/bin/scheff-zello
+Icon=/usr/share/scheff-zello/scheff-zello.png
+Terminal=false
+Type=Application
+Categories=Network;AudioVideo;
+StartupWMClass=scheff-zello

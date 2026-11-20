@@ -6,6 +6,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "sdkconfig.h"
 #include "channel_list.h"
 #include "settings.h"
 #include "zello_client.h"
@@ -32,7 +33,11 @@ static void notify(void)
 
 bool onboard_wifi_done(void)
 {
+#if CONFIG_ZELLO_BOARD_CARDPUTER_ZERO
+    return true;  // the OS owns the network
+#else
     return g_settings.wifi_ssid[0] != 0;
+#endif
 }
 
 bool onboard_account_done(void)

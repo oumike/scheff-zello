@@ -15,7 +15,11 @@
 
 static const char *TAG = "channels";
 
+#if CONFIG_ZELLO_BOARD_CARDPUTER_ZERO
+#define DATA_MOUNT "."
+#else
 #define DATA_MOUNT "/data"
+#endif
 #define DATA_LABEL "storage"
 #define TMP_PATH CHANNEL_LIST_PATH ".tmp"
 

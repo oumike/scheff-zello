@@ -119,6 +119,24 @@ implemented; it has not yet been through a long soak test on hardware.
   the internal flash. [recovery.tanmatsu.cloud](https://recovery.tanmatsu.cloud)
   puts the launcher back.
 
+### M5Stack CardputerZero
+
+- A Linux (arm64) handheld, so this is an app, not firmware: a `.deb` that
+  shows up in the APPLaunch menu. The same code runs on top of a small
+  ESP-IDF/FreeRTOS shim in `linux/compat` and a HAL in `linux/hal`.
+- The UI is drawn on the 320x170 LCD, or in a window when started from a
+  desktop session (`SCHEFF_DISPLAY=window|lcd` overrides the choice).
+- Keys: **hold Space** to talk on the home screen (or tap to toggle with the
+  latching talk setting). The fn
+  layer gives arrows (fn+F/X/Z/C), volume (fn+S/D) and brightness (fn+U/I).
+  Tap **Esc** to go back; **hold Esc** for 1 s to quit.
+- Wi-Fi belongs to the OS: connect in the system settings, and the app signs
+  in once the network is up. The web config is served on port **8080** of the
+  device's address.
+- Audio goes through SDL to the system's default devices, so a USB headset
+  with a microphone works and can be plugged in while the app runs.
+- Settings and channels live in `~/.config/scheff-zello`.
+
 ## Installing
 
 Flash a release from the browser at
@@ -128,6 +146,9 @@ Flash a release from the browser at
 `esptool.py write_flash 0x0 scheff-zello-<board>.bin`. The browser flasher
 keeps the saved settings unless you choose to erase; the release `.bin` is the
 complete image and resets them.
+
+On the CardputerZero, install `scheff-zello-cardputer-zero-v<version>_arm64.deb`
+from Releases with `sudo apt install ./scheff-zello-cardputer-zero-*.deb`.
 
 ## Building
 
@@ -176,6 +197,18 @@ tree, because ESP-IDF refuses a build directory whose path contains a space.
 
 Plain `idf.py build` against an ESP-IDF v5.5.4+ checkout works too.
 
+### CardputerZero
+
+```sh
+./scripts/build-cardputer-zero.sh --deb   # arm64 build + .deb in Docker -> dist/
+./scripts/build-cardputer-zero.sh --sim   # desktop simulator (SDL window), native
+```
+
+The device build runs in a Debian trixie arm64 container
+(`linux/docker/Dockerfile`), so it needs Docker but no cross toolchain. The
+simulator needs CMake, Ninja, pkg-config and SDL2, Opus, libcurl and cJSON
+(Homebrew on macOS), and runs as `linux/build/sim/scheff-zello`.
+
 ### CI and releases
 
 GitHub Actions (`.github/workflows/`):
@@ -184,7 +217,8 @@ GitHub Actions (`.github/workflows/`):
   each push and pull request to `main`; the factory images are kept as run
   artifacts.
 - **Release** (run by hand from the Actions tab) builds every board with the
-  new version, commits `VERSION`, tags `vX.Y.Z`, publishes the images as a
+  new version, commits `VERSION`, tags `vX.Y.Z`, publishes the images (and the
+  CardputerZero `.deb`) as a
   GitHub release and redeploys the site. Leave the version blank to release
   `VERSION` as-is, or its next patch if that is already tagged.
 - **Pages** publishes `site/` with the latest release's images and an
@@ -412,7 +446,7 @@ flash until `crash` or the next report saves it.
 
 ## Licence
 
-No licence has been chosen for the project code yet. The vendored dependencies
+GPL-3.0-only; see `LICENSE`. The vendored dependencies
 keep their own: `components/opus/` is libopus under its BSD licence
 (`components/opus/COPYING`), and `third_party/esp_hosted/` is Espressif's
 ESP-Hosted-MCU under Apache 2.0.

@@ -1,8 +1,8 @@
 name: Release
 
 # Manual only: Actions -> Release -> Run workflow. Builds every board with the
-# new version, commits VERSION, tags vX.Y.Z, publishes the factory images as a
-# GitHub release and redeploys the site so its flasher offers them.
+# new version, commits VERSION, tags vX.Y.Z, publishes the factory images and
+# the CardputerZero .deb as a GitHub release and redeploys the site so its flasher offers them.
 
 on:
   workflow_dispatch:
@@ -92,7 +92,7 @@ jobs:
           fi
           git tag "v$VERSION"
           git push origin "v$VERSION"
-          gh release create "v$VERSION" dist/*.bin \
+          gh release create "v$VERSION" dist/*.bin dist/*.deb \
             --title "v$VERSION" --generate-notes --verify-tag
 
   pages:

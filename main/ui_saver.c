@@ -46,7 +46,7 @@ static const char *TAG = "saver";
 #define PLANT 150
 #define BOX_W 460
 #define STEP  2
-#elif CONFIG_IDF_TARGET_ESP32S3
+#elif CONFIG_IDF_TARGET_ESP32S3 || CONFIG_ZELLO_BOARD_CARDPUTER_ZERO
 #define PLANT 72
 #define BOX_W 200
 #define STEP  1

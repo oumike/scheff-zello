@@ -2,6 +2,7 @@
 
 #include <string.h>
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "driver/gpio.h"
 #include "esp_check.h"
 #include "esp_log.h"
@@ -14,6 +15,8 @@
 #include "zello_client.h"
 #if CONFIG_ZELLO_BOARD_TANMATSU
 #include "bsp/input.h"
+#elif CONFIG_ZELLO_BOARD_CARDPUTER_ZERO
+#include "cp0_keys.h"
 #endif
 
 static const char *TAG = "input";
@@ -56,6 +59,47 @@ static bool dropdown_open(void)
 {
     return focused_is(&lv_dropdown_class) && lv_dropdown_is_open(lv_group_get_focused(s_group));
 }
+
+#if CONFIG_ZELLO_BOARD_TANMATSU || CONFIG_ZELLO_BOARD_CARDPUTER_ZERO
+
+#define VOLUME_STEP 10
+
+// The volume keys: a step the slider on Home follows.
+static void volume_step(int delta)
+{
+    int v = g_settings.volume + delta;
+    v = v < 0 ? 0 : v > 100 ? 100 : v;
+    if (v == g_settings.volume) return;
+    g_settings.volume = v;
+    audio_set_volume(v);
+    audio_beep();
+    settings_save();
+}
+
+// The talk key (the Tanmatsu's F1, the CardputerZero's space bar): held, or
+// toggled with ptt_latch. As with the other boards' talk buttons, a press
+// while the screen is dark only wakes it, and has to be let go before it can
+// talk.
+static void on_talk_key(bool down)
+{
+    static bool s_blocked;
+    if (down && ui_saver_key()) {
+        s_blocked = true;
+        return;
+    }
+    if (s_blocked) {
+        if (!down) s_blocked = false;
+        return;
+    }
+    ESP_LOGI(TAG, "talk key %s", down ? "pressed" : "released");
+    if (g_settings.ptt_latch) {
+        if (down) zello_set_ptt(!zello_ptt());
+    } else {
+        zello_set_ptt(down);
+    }
+}
+
+#endif
 
 #if CONFIG_ZELLO_BOARD_TDECK
 
@@ -172,44 +216,8 @@ static esp_err_t backend_init(void)
 
 #elif CONFIG_ZELLO_BOARD_TANMATSU
 
-#define VOLUME_STEP 10
-
 static QueueHandle_t s_events;
 static volatile bool s_power_down;
-
-// The volume keys on the side: a step the slider on Home follows.
-static void volume_step(int delta)
-{
-    int v = g_settings.volume + delta;
-    v = v < 0 ? 0 : v > 100 ? 100 : v;
-    if (v == g_settings.volume) return;
-    g_settings.volume = v;
-    audio_set_volume(v);
-    audio_beep();
-    settings_save();
-}
-
-// F1 (the X key) talks from any screen: held, or toggled with ptt_latch. As
-// with the other boards' talk buttons, a press while the screen is dark only
-// wakes it, and has to be let go before it can talk.
-static void on_talk_key(bool down)
-{
-    static bool s_blocked;
-    if (down && ui_saver_key()) {
-        s_blocked = true;
-        return;
-    }
-    if (s_blocked) {
-        if (!down) s_blocked = false;
-        return;
-    }
-    ESP_LOGI(TAG, "F1 %s", down ? "pressed" : "released");
-    if (g_settings.ptt_latch) {
-        if (down) zello_set_ptt(!zello_ptt());
-    } else {
-        zello_set_ptt(down);
-    }
-}
 
 static void on_navigation(const bsp_input_event_args_navigation_t *nav)
 {
@@ -285,6 +293,69 @@ static esp_err_t backend_init(void)
 bool input_keys_power_button(void)
 {
     return s_power_down;
+}
+
+#elif CONFIG_ZELLO_BOARD_CARDPUTER_ZERO
+
+// The keyboard arrives from the HAL already through its keymap (shift, sym
+// and fn layers, key repeat): characters, navigation keys, and the space bar
+// as a press and a release so it can be held to talk.
+static bool s_space_talks;  // the space press now held down started talking
+
+static void on_key(const cp0_key_event_t *ev)
+{
+    if (ev->key == CP0_K_SPACE) {
+        // Space talks on the talk screen, unless a text field has focus; then
+        // (and everywhere else) it types.
+        if (ev->down && s_talk_active && !focused_is(&lv_textarea_class)) {
+            s_space_talks = true;
+            on_talk_key(true);
+        } else if (!ev->down && s_space_talks) {
+            s_space_talks = false;
+            on_talk_key(false);
+        } else if (ev->down) {
+            enqueue(' ');
+        }
+        return;
+    }
+    if (!ev->down) return;  // everything else acts on presses
+    switch (ev->key) {
+    case CP0_K_ENTER: enqueue(LV_KEY_ENTER); break;
+    case CP0_K_ESC: enqueue(LV_KEY_ESC); break;
+    case CP0_K_UP: enqueue(dropdown_open() ? LV_KEY_UP : LV_KEY_PREV); break;
+    case CP0_K_DOWN: enqueue(dropdown_open() ? LV_KEY_DOWN : LV_KEY_NEXT); break;
+    case CP0_K_LEFT: enqueue(LV_KEY_LEFT); break;
+    case CP0_K_RIGHT: enqueue(LV_KEY_RIGHT); break;
+    case CP0_K_TAB: enqueue(LV_KEY_NEXT); break;
+    case CP0_K_BACKTAB: enqueue(LV_KEY_PREV); break;
+    case CP0_K_BACKSPACE: enqueue(LV_KEY_BACKSPACE); break;
+    case CP0_K_DELETE: enqueue(LV_KEY_DEL); break;
+    case CP0_K_HOME: enqueue(LV_KEY_HOME); break;
+    case CP0_K_END: enqueue(LV_KEY_END); break;
+    case CP0_K_VOL_UP: volume_step(VOLUME_STEP); break;
+    case CP0_K_VOL_DOWN: volume_step(-VOLUME_STEP); break;
+    default:
+        if (ev->key >= 0x20 && ev->key < 0x7F) enqueue(ev->key);
+        break;
+    }
+}
+
+static void poll_input(void)
+{
+    cp0_key_event_t ev;
+    while (s_q_len < KEY_QUEUE_LEN && cp0_keys_next(&ev)) on_key(&ev);
+}
+
+static esp_err_t backend_init(void)
+{
+    return cp0_keys_start();
+}
+
+void input_keys_click(void) {}
+
+bool input_keys_power_button(void)
+{
+    return false;
 }
 
 #endif

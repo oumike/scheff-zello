@@ -16,3 +16,5 @@ sdkconfig.tanmatsu
 sdkconfig.tanmatsu.old
 sdkconfig.tab5
 sdkconfig.tab5.old
+linux/build/
+dist/

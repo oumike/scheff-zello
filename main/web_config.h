@@ -4,12 +4,20 @@
 #include <stddef.h>
 #include <time.h>
 #include "esp_err.h"
+#include "sdkconfig.h"
 
 // Browser-based setup (Wi-Fi, the Zello account and channels) on port 80. Until
 // onboarding is complete it also brings up a board-named open setup hotspot,
 // with the page at http://192.168.4.1 (no captive portal). The hotspot turns
 // off as soon as station Wi-Fi gets an IP; the web server itself remains
 // available there. Call after net_wifi_init().
+// The CardputerZero runs the app as a normal user, who can't listen on 80.
+#if CONFIG_ZELLO_BOARD_CARDPUTER_ZERO
+#define WEB_CONFIG_PORT 8080
+#else
+#define WEB_CONFIG_PORT 80
+#endif
+
 esp_err_t web_config_start(void);
 
 // The newest backup at the root of the microSD card (scheff-zello-backup*.yaml

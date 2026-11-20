@@ -1,0 +1,23 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "cp0",
+      "displayName": "M5Stack CardputerZero (arm64 Linux)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/cp0",
+      "cacheVariables": { "BOARD": "cp0", "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "sim",
+      "displayName": "Desktop simulator (SDL2)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/sim",
+      "cacheVariables": { "BOARD": "sim", "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "cp0", "configurePreset": "cp0" },
+    { "name": "sim", "configurePreset": "sim" }
+  ]
+}

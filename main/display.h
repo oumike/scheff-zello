@@ -13,6 +13,10 @@
 // ST7701 4" LCD (480x800 portrait, MIPI-DSI), turned to 800x480 landscape.
 #define DISPLAY_H_RES 800
 #define DISPLAY_V_RES 480
+#elif CONFIG_ZELLO_BOARD_CARDPUTER_ZERO
+// The 320x170 panel less the 2 px its bezel covers on the left, right and top.
+#define DISPLAY_H_RES 316
+#define DISPLAY_V_RES 168
 #elif CONFIG_ZELLO_BOARD_TAB5
 // 5" LCD (720x1280 portrait, MIPI-DSI): ST7123, ST7121 or ILI9881C.
 #define DISPLAY_H_RES 720

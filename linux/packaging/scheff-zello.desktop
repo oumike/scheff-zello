@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Scheff Zello
+Exec=/usr/share/APPLaunch/bin/scheff-zello
+Terminal=false
+Icon=share/images/scheff-zello.png
+Type=Application

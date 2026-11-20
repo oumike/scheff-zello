@@ -44,8 +44,15 @@ static const char *TAG = "web";
 // zello-p4-backup.xml; a card may still hold one, and import reads it.
 #define SD_LEGACY_BACKUP_PATH SDCARD_MOUNT "/zello-p4-backup.xml"
 
+#if CONFIG_ZELLO_BOARD_CARDPUTER_ZERO
+// The Linux build generates these from web/index.html (linux/embed.cmake).
+extern const char index_html_start[];
+extern const unsigned long index_html_size;  // with the terminating NUL
+#define index_html_end (index_html_start + index_html_size)
+#else
 extern const char index_html_start[] asm("_binary_index_html_start");
 extern const char index_html_end[] asm("_binary_index_html_end");
+#endif
 
 static httpd_handle_t s_httpd;
 static bool s_ap_stop_pending;
@@ -468,6 +475,19 @@ static esp_err_t h_status(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "channels", channel_list_count());
     cJSON_AddNumberToObject(root, "favorites", channel_list_favorite_count());
     cJSON_AddBoolToObject(root, "onboarded", onboard_complete());
+
+    // What the page should offer: the CardputerZero's Wi-Fi belongs to its
+    // OS, and its backups live in a folder rather than on a card.
+    cJSON *device = cJSON_AddObjectToObject(root, "device");
+#if CONFIG_ZELLO_BOARD_CARDPUTER_ZERO
+    cJSON_AddBoolToObject(device, "os_wifi", true);
+    cJSON_AddBoolToObject(device, "crash_reports", false);
+#else
+    cJSON_AddBoolToObject(device, "os_wifi", false);
+    cJSON_AddBoolToObject(device, "crash_reports", true);
+#endif
+    cJSON_AddStringToObject(device, "storage_on", SDCARD_ON);
+    cJSON_AddStringToObject(device, "storage_from", SDCARD_FROM);
     return send_json(req, root);
 }
 
@@ -937,7 +957,7 @@ static esp_err_t h_import_upload(httpd_req_t *req)
 
 static esp_err_t sd_error(httpd_req_t *req)
 {
-    return send_error(req, "503 Service Unavailable", "No SD card found. Insert a FAT-formatted microSD card.");
+    return send_error(req, "503 Service Unavailable", SDCARD_MISSING);
 }
 
 // POST /api/sd/export and /api/sd/import: a complete backup at the root of the
@@ -946,10 +966,10 @@ static esp_err_t sd_error(httpd_req_t *req)
 // otherwise `fail` says what went wrong.
 static esp_err_t sd_export(const char **fail)
 {
-    *fail = "Couldn't write to the SD card.";
+    *fail = "Couldn't write the backup " SDCARD_ON ".";
     if (sdcard_mount() != ESP_OK) return ESP_ERR_NOT_FOUND;
     if (file_store_recover(SD_BACKUP_PATH) != ESP_OK) {
-        *fail = "Couldn't recover the SD card backup.";
+        *fail = "Couldn't recover the backup " SDCARD_ON ".";
         return ESP_FAIL;
     }
     FILE *file = fopen(SD_BACKUP_PATH ".tmp", "w");
@@ -970,12 +990,12 @@ esp_err_t web_config_sd_backup_export(char *msg, size_t size)
     const char *fail;
     esp_err_t err = sd_export(&fail);
     if (err == ESP_ERR_NOT_FOUND) {
-        strlcpy(msg, "No SD card found. Insert a FAT-formatted microSD card.", size);
+        strlcpy(msg, SDCARD_MISSING, size);
     } else if (err != ESP_OK) {
         strlcpy(msg, fail, size);
     } else {
         unsigned n = channel_list_count();
-        snprintf(msg, size, "Saved the settings and %u channel%s to " BACKUP_FILE_NAME " on the SD card.", n,
+        snprintf(msg, size, "Saved the settings and %u channel%s to " BACKUP_FILE_NAME " " SDCARD_ON ".", n,
                  n == 1 ? "" : "s");
     }
     return err;
@@ -1042,11 +1062,11 @@ static esp_err_t h_sd_import(httpd_req_t *req)
     esp_err_t err = backup_read_file(SD_BACKUP_PATH, &text);
     if (err == ESP_ERR_NOT_FOUND) err = backup_read_file(SD_LEGACY_BACKUP_PATH, &text);
     if (err == ESP_ERR_NOT_FOUND) {
-        return send_error(req, "404 Not Found", "No " BACKUP_FILE_NAME " on the SD card.");
+        return send_error(req, "404 Not Found", "No " BACKUP_FILE_NAME " " SDCARD_ON ".");
     }
     if (err == ESP_ERR_INVALID_SIZE) return send_error(req, "400 Bad Request", "That file is empty or too large.");
     if (err == ESP_ERR_INVALID_ARG) return send_error(req, "400 Bad Request", "The backup contains a NUL byte.");
-    if (err != ESP_OK) return send_error(req, "500 Internal Server Error", "Couldn't read the SD card backup.");
+    if (err != ESP_OK) return send_error(req, "500 Internal Server Error", "Couldn't read the backup " SDCARD_ON ".");
     import_outcome_t o;
     import_backup(text, &o);
     memset(text, 0, strlen(text));
@@ -1110,7 +1130,7 @@ esp_err_t web_config_sd_backup_import(const char *name, char *msg, size_t size)
     esp_err_t err = sdcard_mount();
     if (err == ESP_OK) err = backup_read_file(path, &text);
     if (err != ESP_OK) {
-        snprintf(msg, size, "Couldn't read %s from the SD card.", name);
+        snprintf(msg, size, "Couldn't read %s " SDCARD_FROM ".", name);
         return err;
     }
     import_outcome_t o;
@@ -1213,6 +1233,7 @@ static void onboard_changed(void)
 esp_err_t web_config_start(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
+    cfg.server_port = WEB_CONFIG_PORT;
     cfg.max_uri_handlers = 24;
     cfg.lru_purge_enable = true;
     cfg.stack_size = 6144;
@@ -1253,6 +1274,6 @@ esp_err_t web_config_start(void)
     if (!onboard_complete() && net_wifi_ap_start() == ESP_OK) {
         onboard_changed();
     }
-    ESP_LOGI(TAG, "web config on port 80%s", net_wifi_ap_active() ? " (setup hotspot up)" : "");
+    ESP_LOGI(TAG, "web config on port %d%s", WEB_CONFIG_PORT, net_wifi_ap_active() ? " (setup hotspot up)" : "");
     return ESP_OK;
 }

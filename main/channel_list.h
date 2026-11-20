@@ -19,7 +19,14 @@
 #include <stdint.h>
 #include "esp_err.h"
 
+#include "sdkconfig.h"
+
+#if CONFIG_ZELLO_BOARD_CARDPUTER_ZERO
+// Relative to the app's folder, which the app runs in.
+#define CHANNEL_LIST_PATH "zello-channels.xml"
+#else
 #define CHANNEL_LIST_PATH "/data/zello-channels.xml"
+#endif
 #define CHANNEL_LIST_MAX  128
 
 typedef struct {
