@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <sys/types.h>
 #include "esp_err.h"
+#include <stdint.h>
 
 #define HTTPD_SOCK_ERR_TIMEOUT (-3)
 #define ESP_ERR_HTTPD_RESULT_TRUNC 0x7007
