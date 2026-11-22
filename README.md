@@ -82,7 +82,9 @@ implemented; it has not yet been through a long soak test on hardware.
 - ESP32-P4 (pre-rev-3.0, like the T-Display-P4) with 16 MB flash and 32 MB
   PSRAM; Wi-Fi is its ESP32-C6 over ESP-Hosted, so the C6 must run slave
   firmware matching `third_party/esp_hosted` (v2.12.x). The C6 is
-  power-cycled through the IO expander at boot.
+  power-cycled through the IO expander at boot. Early Tab5s ship an older C6
+  image (it reports version 0.0.0) that refuses to start Wi-Fi; the app then
+  runs without Wi-Fi until the C6 is updated (e.g. with M5Burner).
 - The 5" 720x1280 MIPI-DSI screen in portrait. Both panel variants are
   detected at boot from the touch controller: ST7123 (current) or ILI9881C
   with GT911 touch (early units). There is no keyboard; text is typed on the
@@ -93,6 +95,8 @@ implemented; it has not yet been through a long soak test on hardware.
 - Audio is the ES8388 DAC into the speaker amplifier and the ES7210 microphone
   ADC, sharing one I2S port. Which ES7210 channel carries the microphone is
   not confirmed yet: `MIC_SLOT` in `main/audio.c` averages both.
+- A USB audio adapter or headset (UAC 1.0, as on the Tanmatsu) in the USB-A
+  port takes over the microphone and playback while plugged in, hot-plugged.
 - The battery is read through the INA226 monitor (2S pack).
 
 ### Nicolai Electronics Tanmatsu
@@ -133,8 +137,11 @@ implemented; it has not yet been through a long soak test on hardware.
 - Wi-Fi belongs to the OS: connect in the system settings, and the app signs
   in once the network is up. The web config is served on port **8960** of the
   device's address.
-- Audio goes through SDL to the system's default devices, so a USB headset
-  with a microphone works and can be plugged in while the app runs.
+- Channel activity and the message field have a **Chat** screen of their own,
+  opened from the button on the home screen.
+- Audio goes through SDL; the volume is the system's (ALSA mixer). A USB
+  headset's microphone is preferred over the built-in one and can be plugged
+  in while the app runs.
 - Settings and channels live in `~/.config/scheff-zello`.
 
 ## Installing
@@ -297,8 +304,8 @@ The home screen is also the talk screen:
 
 After 2 minutes untouched (once set up), or a tap on the board's screen button,
 the screen shows a schefflera bouncing slowly round it, carrying the Zello
-status and the channel's latest activity (who is talking, or the last two
-lines). Audio keeps playing. After 10 more minutes the screen goes dark.
+status on one line: the channel and how many are listening, or who is
+talking. Audio keeps playing. After 10 more minutes the screen goes dark.
 
 - **Hold the screen button 2 s** to get back to where you were. A tap does
   nothing while the screensaver is up, and lights it again from a dark screen,
