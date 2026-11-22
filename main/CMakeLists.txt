@@ -14,6 +14,11 @@ elseif(CONFIG_ZELLO_BOARD_TANMATSU)
 elseif(CONFIG_ZELLO_BOARD_WIO_TRACKER_L2)
     list(APPEND srcs "lcd_nv3031b.c")
 endif()
+# Upstream ESP-Hosted comes from components/hosted_upstream's manifest, so
+# main names it rather than getting it through its own manifest.
+if(CONFIG_ZELLO_HOSTED_UPSTREAM)
+    list(APPEND board_requires esp_hosted)
+endif()
 # A USB audio adapter on the USB-A host port (Tanmatsu, Tab5).
 if(CONFIG_ZELLO_USB_AUDIO)
     list(APPEND srcs "usb_audio.c")

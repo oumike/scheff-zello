@@ -26,12 +26,13 @@ dependencies:
   # need because the C6 EN line sits on the XL9535 I/O expander, not a GPIO. It
   # is vendored under third_party/ rather than fetched, and must match the
   # ESP-Hosted slave firmware flashed on the C6 (the LilygoBox network-adapter
-  # image).
+  # image). The Tab5 uses upstream instead: components/hosted_upstream.
   espressif/esp_hosted:
     override_path: "../third_party/esp_hosted"
     rules:
       - if: "target in [esp32p4]"
       - if: "$CONFIG{ZELLO_USE_BADGE_BSP} == 0"
+      - if: "$CONFIG{ZELLO_HOSTED_UPSTREAM} == 0"
 
   # Nicolai Electronics Tanmatsu: badge-bsp drives the display, keyboard
   # (through the CH32 coprocessor), power, radio power and the ES8156 DAC.

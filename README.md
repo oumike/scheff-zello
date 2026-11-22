@@ -80,11 +80,10 @@ implemented; it has not yet been through a long soak test on hardware.
 ### M5Stack Tab5
 
 - ESP32-P4 (pre-rev-3.0, like the T-Display-P4) with 16 MB flash and 32 MB
-  PSRAM; Wi-Fi is its ESP32-C6 over ESP-Hosted, so the C6 must run slave
-  firmware matching `third_party/esp_hosted` (v2.12.x). The C6 is
-  power-cycled through the IO expander at boot. Early Tab5s ship an older C6
-  image (it reports version 0.0.0) that refuses to start Wi-Fi; the app then
-  runs without Wi-Fi until the C6 is updated (e.g. with M5Burner).
+  PSRAM; Wi-Fi is its ESP32-C6 over ESP-Hosted. The Tab5 build uses upstream
+  ESP-Hosted 2.12.13 (as arduino-esp32 does), which works with the C6's stock
+  slave firmware, rather than the T-Display-P4's LilyGO fork. The C6 is
+  power-cycled through the IO expander and reset at every boot.
 - The 5" 720x1280 MIPI-DSI screen in portrait. Both panel variants are
   detected at boot from the touch controller: ST7123 (current) or ILI9881C
   with GT911 touch (early units). There is no keyboard; text is typed on the

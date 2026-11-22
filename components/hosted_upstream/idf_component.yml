@@ -1,0 +1,10 @@
+# Upstream ESP-Hosted for the Tab5: its C6 runs Espressif's slave firmware,
+# which LilyGO's fork (third_party/esp_hosted, for the T-Display-P4's C6)
+# does not talk to (esp_wifi_init is refused). 2.12.13 is the version
+# arduino-esp32 ships, which works with the Tab5's stock C6. A separate
+# manifest because main's already names espressif/esp_hosted for the fork.
+dependencies:
+  espressif/esp_hosted:
+    version: "==2.12.13"
+    rules:
+      - if: "$CONFIG{ZELLO_HOSTED_UPSTREAM} == 1"
