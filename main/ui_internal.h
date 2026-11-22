@@ -44,6 +44,9 @@
 #define UI_HAS_KEYBOARD 1
 // The OS joins Wi-Fi networks; the app only uses the connection.
 #define UI_OS_WIFI      1
+// Too short for the activity log and message line beside the talk controls:
+// they get a Chat screen of their own, opened from Home's header.
+#define UI_CHAT_SCREEN  1
 
 #elif CONFIG_ZELLO_BOARD_TANMATSU
 
@@ -169,6 +172,9 @@
 #endif
 #ifndef UI_VOLUME_VERTICAL
 #define UI_VOLUME_VERTICAL 0
+#endif
+#ifndef UI_CHAT_SCREEN
+#define UI_CHAT_SCREEN 0
 #endif
 #ifndef UI_HOME_HEADER_FONT
 #define UI_HOME_HEADER_FONT UI_FONT

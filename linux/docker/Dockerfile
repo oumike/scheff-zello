@@ -7,5 +7,5 @@ FROM debian:trixie@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a47
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       build-essential ca-certificates cmake ninja-build pkg-config file git \
-      libcurl4-openssl-dev libsdl2-dev libopus-dev libcjson-dev \
+      libcurl4-openssl-dev libsdl2-dev libopus-dev libcjson-dev libasound2-dev \
  && rm -rf /var/lib/apt/lists/*

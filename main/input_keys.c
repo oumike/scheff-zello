@@ -62,18 +62,33 @@ static bool dropdown_open(void)
 
 #if CONFIG_ZELLO_BOARD_TANMATSU || CONFIG_ZELLO_BOARD_CARDPUTER_ZERO
 
+// Left and right: the cursor in a text field, a slider's value, an open
+// dropdown's selection; otherwise focus moves, as with up and down, so a form
+// (and a row of buttons in it) can be walked with any arrow.
+static uint32_t horizontal_key(bool right)
+{
+    if (focused_is(&lv_textarea_class) || focused_is(&lv_slider_class) || dropdown_open()) {
+        return right ? LV_KEY_RIGHT : LV_KEY_LEFT;
+    }
+    return right ? LV_KEY_NEXT : LV_KEY_PREV;
+}
+
 #define VOLUME_STEP 10
 
 // The volume keys: a step the slider on Home follows.
+static esp_err_t adjust_volume(settings_t *values, void *ctx)
+{
+    int v = values->volume + *(int *)ctx;
+    v = v < 0 ? 0 : v > 100 ? 100 : v;
+    values->volume = v;
+    return ESP_OK;
+}
+
 static void volume_step(int delta)
 {
-    int v = g_settings.volume + delta;
-    v = v < 0 ? 0 : v > 100 ? 100 : v;
-    if (v == g_settings.volume) return;
-    g_settings.volume = v;
-    audio_set_volume(v);
+    if (settings_update(adjust_volume, &delta) != ESP_OK) return;
+    audio_set_volume(g_settings.volume);
     audio_beep();
-    settings_save();
 }
 
 // The talk key (the Tanmatsu's F1, the CardputerZero's space bar): held, or
@@ -231,8 +246,8 @@ static void on_navigation(const bsp_input_event_args_navigation_t *nav)
     case BSP_INPUT_NAVIGATION_KEY_ESC: enqueue(LV_KEY_ESC); break;
     case BSP_INPUT_NAVIGATION_KEY_UP: enqueue(dropdown_open() ? LV_KEY_UP : LV_KEY_PREV); break;
     case BSP_INPUT_NAVIGATION_KEY_DOWN: enqueue(dropdown_open() ? LV_KEY_DOWN : LV_KEY_NEXT); break;
-    case BSP_INPUT_NAVIGATION_KEY_LEFT: enqueue(LV_KEY_LEFT); break;
-    case BSP_INPUT_NAVIGATION_KEY_RIGHT: enqueue(LV_KEY_RIGHT); break;
+    case BSP_INPUT_NAVIGATION_KEY_LEFT: enqueue(horizontal_key(false)); break;
+    case BSP_INPUT_NAVIGATION_KEY_RIGHT: enqueue(horizontal_key(true)); break;
     case BSP_INPUT_NAVIGATION_KEY_HOME: enqueue(LV_KEY_HOME); break;
     case BSP_INPUT_NAVIGATION_KEY_END: enqueue(LV_KEY_END); break;
     case BSP_INPUT_NAVIGATION_KEY_TAB:
@@ -324,8 +339,8 @@ static void on_key(const cp0_key_event_t *ev)
     case CP0_K_ESC: enqueue(LV_KEY_ESC); break;
     case CP0_K_UP: enqueue(dropdown_open() ? LV_KEY_UP : LV_KEY_PREV); break;
     case CP0_K_DOWN: enqueue(dropdown_open() ? LV_KEY_DOWN : LV_KEY_NEXT); break;
-    case CP0_K_LEFT: enqueue(LV_KEY_LEFT); break;
-    case CP0_K_RIGHT: enqueue(LV_KEY_RIGHT); break;
+    case CP0_K_LEFT: enqueue(horizontal_key(false)); break;
+    case CP0_K_RIGHT: enqueue(horizontal_key(true)); break;
     case CP0_K_TAB: enqueue(LV_KEY_NEXT); break;
     case CP0_K_BACKTAB: enqueue(LV_KEY_PREV); break;
     case CP0_K_BACKSPACE: enqueue(LV_KEY_BACKSPACE); break;
@@ -372,6 +387,16 @@ static void route_to_compose(uint32_t key)
 }
 
 // Each queued key goes to LVGL as a press, then a release on the next read.
+// Esc, unless it's closing an open dropdown, is also LV_EVENT_CANCEL to the
+// screen or full-screen form in front, so one can go back on it.
+static lv_obj_t *focus_root(void);
+
+static void send_escape(void)
+{
+    if (dropdown_open()) return;
+    lv_obj_send_event(focus_root(), LV_EVENT_CANCEL, NULL);
+}
+
 // DEBUG: abort (core dump) when the LVGL loop stalls, to see where it hangs.
 static volatile uint32_t s_ui_beat;
 static void ui_stall_task(void *arg)
@@ -412,6 +437,7 @@ static void keypad_read(lv_indev_t *indev, lv_indev_data_t *data)
     if (s_q_len) {
         last_key = s_queue[s_q_head];
         route_to_compose(last_key);
+        if (last_key == LV_KEY_ESC) send_escape();
         s_q_head = (s_q_head + 1) % KEY_QUEUE_LEN;
         s_q_len--;
         release_pending = true;

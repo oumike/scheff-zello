@@ -21,6 +21,9 @@ void input_keys_set_talk_screen(lv_obj_t *scr, lv_obj_t *compose);
 // from any task.
 bool input_keys_talk_active(void);
 
+// Esc (other than closing an open dropdown) sends LV_EVENT_CANCEL to the
+// screen, or full-screen form, in front: add a handler there to go back.
+
 // Moves keyboard focus to `obj`, a field the code wants typed into next. If
 // it isn't in the focus group yet (its screen is still coming up), it is
 // focused once it is, if that happens within a second. Must be called with

@@ -26,6 +26,6 @@ set(CPACK_DEBIAN_PACKAGE_SECTION APPLaunch)
 set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE arm64)
 set(CPACK_DEBIAN_PACKAGE_HOMEPAGE "https://github.com/oumike/scheff-zello")
 # Trixie renamed libcurl for the 64-bit time_t move; the older name as a fallback.
-set(CPACK_DEBIAN_PACKAGE_DEPENDS "libcurl4t64 | libcurl4, libsdl2-2.0-0 (>= 2.26), libopus0, libcjson1")
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "libcurl4t64 | libcurl4, libsdl2-2.0-0 (>= 2.26), libopus0, libcjson1, libasound2t64 | libasound2")
 set(CPACK_STRIP_FILES ON)
 include(CPack)

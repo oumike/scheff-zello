@@ -2,7 +2,9 @@
 // you're in, the recent channel activity, a line for sending the channel a
 // text message, and one big hold-to-talk button.
 // Channels and Settings (Wi-Fi and the account) open from the two buttons
-// at the top.
+// at the top. With UI_CHAT_SCREEN (the CardputerZero's short screen), the
+// activity and the message line move to a Chat screen of their own, opened
+// from a third button there, which lights up when something new arrives.
 
 #include <ctype.h>
 #include <stdio.h>
@@ -26,6 +28,10 @@
 static lv_obj_t *s_scr, *s_username, *s_channel, *s_status, *s_web, *s_log;
 static lv_obj_t *s_meter, *s_talk, *s_talk_label;
 static lv_obj_t *s_kb, *s_compose, *s_volume, *s_volume_slider, *s_volume_value;
+#if UI_CHAT_SCREEN
+static lv_obj_t *s_chat_scr, *s_chat_kb, *s_chat_btn, *s_chat_channel;
+static bool s_chat_unread;
+#endif
 static lv_timer_t *s_timer;
 // The activity log is several KB: keep it and its working copy off the LVGL
 // task's stack and out of internal RAM.
@@ -51,6 +57,12 @@ void ui_home_refresh_account(void)
     if (s_username) lv_label_set_text(s_username, g_settings.username[0] ? g_settings.username : "Not signed in");
     lv_label_set_text_fmt(s_channel, LV_SYMBOL_LIST "  %s",
                           g_settings.channel[0] ? g_settings.channel : "No channel yet");
+#if UI_CHAT_SCREEN
+    if (s_chat_channel) {
+        lv_label_set_text_fmt(s_chat_channel, LV_SYMBOL_ENVELOPE "  %s",
+                              g_settings.channel[0] ? g_settings.channel : "No channel yet");
+    }
+#endif
 }
 
 // ---- talk button -----------------------------------------------------------
@@ -93,21 +105,34 @@ static void talk_event(lv_event_t *e)
 
 // The volume value label rides in the event's user data, so the row can sit
 // on any screen.
+static void save_volume(lv_event_t *e)
+{
+    char value[4];
+    snprintf(value, sizeof(value), "%u", (unsigned)lv_slider_get_value(lv_event_get_target(e)));
+    if (settings_store("volume", value) != ESP_OK) {
+        audio_set_volume(g_settings.volume);
+        lv_slider_set_value(lv_event_get_target(e), g_settings.volume, LV_ANIM_OFF);
+        lv_label_set_text_fmt(lv_event_get_user_data(e), "%u%%", g_settings.volume);
+    }
+}
+
 static void volume_event(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
     if (code == LV_EVENT_VALUE_CHANGED) {
         int volume = lv_slider_get_value(lv_event_get_target(e));
-        g_settings.volume = volume;
         audio_set_volume(volume);
         lv_label_set_text_fmt(lv_event_get_user_data(e), "%d%%", volume);
         // A keypad step is a whole change: let it be heard. A drag beeps once,
         // when it is let go.
-        if (!lv_obj_has_state(lv_event_get_target(e), LV_STATE_PRESSED)) audio_beep();
+        if (!lv_obj_has_state(lv_event_get_target(e), LV_STATE_PRESSED)) {
+            save_volume(e);
+            audio_beep();
+        }
     } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST || code == LV_EVENT_DEFOCUSED) {
         // Released a drag, or (keypad) moved on after stepping it.
         if (code != LV_EVENT_DEFOCUSED) audio_beep();
-        settings_save();
+        save_volume(e);
     }
 }
 
@@ -251,8 +276,9 @@ static void home_kb_event(lv_event_t *e)
 }
 #endif
 
-// The message line and its Send button.
-static void compose_create(lv_obj_t *parent)
+// The message line and its Send button, typed on `kb` where there's no
+// keyboard.
+static void compose_create(lv_obj_t *parent, lv_obj_t *kb)
 {
     lv_obj_t *row = plain_row(parent);
     s_compose = lv_textarea_create(row);
@@ -266,7 +292,7 @@ static void compose_create(lv_obj_t *parent)
     // Ahead of the keyboard's own handler, so the talk controls are gone
     // before the field is scrolled into view above the keyboard.
     lv_obj_add_event_cb(s_compose, compose_event, LV_EVENT_ALL, NULL);
-    ui_field_attach_keyboard(s_compose, s_kb);
+    ui_field_attach_keyboard(s_compose, kb);
 
     lv_obj_t *send = ui_button(row, LV_SYMBOL_RIGHT " Send", UI_COLOR_LINK, send_clicked, NULL);
     lv_obj_set_size(send, LV_SIZE_CONTENT, UI_EDIT_BUTTON_H + UI_PAD);
@@ -277,10 +303,73 @@ static void compose_create(lv_obj_t *parent)
     lv_obj_remove_flag(send, LV_OBJ_FLAG_CLICK_FOCUSABLE);
 
 #if !UI_HAS_KEYBOARD
-    lv_obj_add_event_cb(s_kb, home_kb_event, LV_EVENT_READY, NULL);
-    lv_obj_add_event_cb(s_kb, home_kb_event, LV_EVENT_CANCEL, NULL);
+    lv_obj_add_event_cb(kb, home_kb_event, LV_EVENT_READY, NULL);
+    lv_obj_add_event_cb(kb, home_kb_event, LV_EVENT_CANCEL, NULL);
 #endif
 }
+
+// Channel activity: talkers, text messages and errors, in a scrolling panel.
+static lv_obj_t *log_box_create(lv_obj_t *parent)
+{
+    lv_obj_t *box = lv_obj_create(parent);
+    lv_obj_set_style_bg_color(box, UI_COLOR_PANEL, 0);
+    lv_obj_set_style_border_width(box, 0, 0);
+    lv_obj_set_style_radius(box, UI_RADIUS, 0);
+    lv_obj_set_style_pad_all(box, UI_PAD, 0);
+    lv_obj_set_scroll_dir(box, LV_DIR_VER);
+    s_log = ui_label(box, "Channel activity shows up here.", UI_FONT_SMALL, UI_COLOR_MUTED);
+    return box;
+}
+
+// ---- chat screen -----------------------------------------------------------
+
+#if UI_CHAT_SCREEN
+static void chat_set_unread(bool unread)
+{
+    s_chat_unread = unread;
+    lv_obj_set_style_bg_color(s_chat_btn, unread ? UI_COLOR_ACCENT : UI_COLOR_PANEL, 0);
+    lv_obj_set_style_text_color(lv_obj_get_child(s_chat_btn, 0), unread ? UI_COLOR_BG : lv_color_white(), 0);
+}
+
+static void chat_open(lv_event_t *e)
+{
+    chat_set_unread(false);
+    lv_screen_load(s_chat_scr);
+    lv_obj_scroll_to_y(lv_obj_get_parent(s_log), LV_COORD_MAX, LV_ANIM_OFF);
+    input_keys_focus(s_compose);
+}
+
+static void chat_close(lv_event_t *e)
+{
+    lv_screen_load(s_scr);
+}
+
+
+static void chat_create(void)
+{
+    lv_obj_t *col = ui_screen_create(&s_chat_scr, &s_chat_kb);
+    lv_obj_remove_flag(col, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Back, then the channel, leaving the right-hand end to the status bar.
+    lv_obj_t *header = plain_row(col);
+    lv_obj_set_style_pad_right(header, UI_STATUS_BAR_W, 0);
+    lv_obj_t *back = ui_button(header, LV_SYMBOL_LEFT, UI_COLOR_PANEL, chat_close, NULL);
+    lv_obj_set_size(back, UI_EDIT_BUTTON_H + UI_PAD, UI_EDIT_BUTTON_H);
+    lv_obj_set_style_text_font(lv_obj_get_child(back, 0), UI_HOME_HEADER_FONT, 0);
+    s_chat_channel = ui_label(header, "", UI_HOME_HEADER_FONT, UI_COLOR_ACCENT);
+    lv_obj_set_width(s_chat_channel, 0);
+    lv_obj_set_flex_grow(s_chat_channel, 1);
+    lv_label_set_long_mode(s_chat_channel, LV_LABEL_LONG_DOT);
+
+    lv_obj_t *box = log_box_create(col);
+    lv_obj_set_width(box, LV_PCT(100));
+    lv_obj_set_flex_grow(box, 1);
+
+    compose_create(col, s_chat_kb);
+    // Esc goes back to Home too.
+    lv_obj_add_event_cb(s_chat_scr, chat_close, LV_EVENT_CANCEL, NULL);
+}
+#endif
 
 // ---- periodic refresh ------------------------------------------------------
 
@@ -373,6 +462,9 @@ static void refresh(lv_timer_t *t)
         lv_label_set_text(s_log, s_log_buf[0] ? s_log_buf : "Channel activity shows up here.");
         // Keep the newest line in view.
         lv_obj_scroll_to_y(lv_obj_get_parent(s_log), LV_COORD_MAX, LV_ANIM_OFF);
+#if UI_CHAT_SCREEN
+        if (s_log_buf[0] && lv_screen_active() != s_chat_scr) chat_set_unread(true);
+#endif
     }
 }
 
@@ -424,11 +516,25 @@ void ui_home_show(void)
         lv_obj_set_width(s_channel, 0);
         lv_obj_set_flex_grow(s_channel, 1);
         lv_label_set_long_mode(s_channel, LV_LABEL_LONG_DOT);
-        for (int i = 0; i < 2; i++) {
-            lv_obj_t *b = ui_button(header, i ? LV_SYMBOL_SETTINGS : LV_SYMBOL_LIST, UI_COLOR_PANEL,
-                                    i ? settings_clicked : channels_clicked, NULL);
+        static const char *const kHeaderIcons[] = {
+            LV_SYMBOL_LIST, LV_SYMBOL_SETTINGS,
+#if UI_CHAT_SCREEN
+            LV_SYMBOL_ENVELOPE,
+#endif
+        };
+        static const lv_event_cb_t kHeaderCbs[] = {
+            channels_clicked, settings_clicked,
+#if UI_CHAT_SCREEN
+            chat_open,
+#endif
+        };
+        for (size_t i = 0; i < sizeof(kHeaderIcons) / sizeof(kHeaderIcons[0]); i++) {
+            lv_obj_t *b = ui_button(header, kHeaderIcons[i], UI_COLOR_PANEL, kHeaderCbs[i], NULL);
             lv_obj_set_size(b, UI_EDIT_BUTTON_H + UI_PAD, UI_EDIT_BUTTON_H);
             lv_obj_set_style_text_font(lv_obj_get_child(b, 0), UI_HOME_HEADER_FONT, 0);
+#if UI_CHAT_SCREEN
+            if (kHeaderCbs[i] == chat_open) s_chat_btn = b;
+#endif
         }
 
         s_status = ui_label(col, "", UI_FONT_SMALL, UI_COLOR_MUTED);
@@ -448,27 +554,25 @@ void ui_home_show(void)
 #endif
 
         // Channel activity: talkers, text messages and errors.
-#if UI_VOLUME_VERTICAL
+#if UI_CHAT_SCREEN
+        // On its own screen, with the message line.
+        chat_create();
+#elif UI_VOLUME_VERTICAL
         lv_obj_t *mid = plain_row(col);
         lv_obj_set_height(mid, 0);
         lv_obj_set_flex_grow(mid, 1);
-        lv_obj_t *box = lv_obj_create(mid);
+        lv_obj_t *box = log_box_create(mid);
         lv_obj_set_size(box, 0, LV_PCT(100));
         lv_obj_set_flex_grow(box, 1);
         s_volume = ui_volume_column(mid);
 #else
-        lv_obj_t *box = lv_obj_create(col);
+        lv_obj_t *box = log_box_create(col);
         lv_obj_set_width(box, LV_PCT(100));
         lv_obj_set_flex_grow(box, 1);
 #endif
-        lv_obj_set_style_bg_color(box, UI_COLOR_PANEL, 0);
-        lv_obj_set_style_border_width(box, 0, 0);
-        lv_obj_set_style_radius(box, UI_RADIUS, 0);
-        lv_obj_set_style_pad_all(box, UI_PAD, 0);
-        lv_obj_set_scroll_dir(box, LV_DIR_VER);
-        s_log = ui_label(box, "Channel activity shows up here.", UI_FONT_SMALL, UI_COLOR_MUTED);
-
-        compose_create(col);
+#if !UI_CHAT_SCREEN
+        compose_create(col, s_kb);
+#endif
 
 #if UI_LANDSCAPE
         meter_create(col);  // above the volume, under the activity panel
@@ -488,6 +592,10 @@ void ui_home_show(void)
 
         s_talk = lv_button_create(col);
         lv_obj_set_size(s_talk, LV_PCT(100), UI_TALK_BUTTON_H);
+#if UI_CHAT_SCREEN
+        // The room the activity panel had.
+        lv_obj_set_flex_grow(s_talk, 1);
+#endif
         lv_obj_set_style_radius(s_talk, UI_RADIUS * 3, 0);
         lv_obj_add_event_cb(s_talk, talk_event, LV_EVENT_ALL, NULL);
         s_talk_label = lv_label_create(s_talk);
@@ -497,7 +605,8 @@ void ui_home_show(void)
         set_talk(UI_COLOR_PANEL, LV_SYMBOL_AUDIO "  OFFLINE");
 
 #if UI_HAS_KEYBOARD
-        input_keys_set_talk_screen(s_scr, s_compose);
+        // With a Chat screen, typing on Home has nowhere to go.
+        input_keys_set_talk_screen(s_scr, UI_CHAT_SCREEN ? NULL : s_compose);
 #endif
         s_timer = lv_timer_create(refresh, REFRESH_MS, NULL);
         ui_home_refresh_account();

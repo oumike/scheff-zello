@@ -1,7 +1,7 @@
 # scheff-zello for Linux: the M5Stack CardputerZero (BOARD=cp0, an arm64
 # .deb for its launcher) and a desktop simulator (BOARD=sim). The app is
 # main/'s shared code over linux/compat (ESP-IDF and FreeRTOS on POSIX) and
-# linux/hal (framebuffer or SDL window, evdev keyboard, SDL audio).
+# linux/hal (framebuffer or SDL window, evdev keyboard, SDL audio, ALSA mixer).
 cmake_minimum_required(VERSION 3.20)
 
 file(READ "${CMAKE_CURRENT_LIST_DIR}/../VERSION" SCHEFF_VERSION)
@@ -69,6 +69,13 @@ else()
   set(CJSON_TARGET PkgConfig::CJSON)
 endif()
 find_package(Threads REQUIRED)
+# The system mixer, so the volume is the OS's own. Required on the device;
+# without it (the macOS simulator) the app scales its own stream instead.
+if(BOARD STREQUAL "cp0")
+  pkg_check_modules(ALSA REQUIRED IMPORTED_TARGET alsa)
+else()
+  pkg_check_modules(ALSA IMPORTED_TARGET alsa)
+endif()
 
 # ---- the web config page -------------------------------------------------
 # index_html_start/end as the ESP build's EMBED_TXTFILES gives them: the
@@ -122,6 +129,10 @@ endif()
 target_compile_options(scheff-zello PRIVATE -Wall -Wno-unused-function -Wno-format-truncation)
 target_link_libraries(scheff-zello PRIVATE
   lvgl ${CJSON_TARGET} PkgConfig::OPUS PkgConfig::CURL PkgConfig::SDL2 Threads::Threads m)
+if(ALSA_FOUND)
+  target_compile_definitions(scheff-zello PRIVATE HAVE_ALSA_MIXER=1)
+  target_link_libraries(scheff-zello PRIVATE PkgConfig::ALSA)
+endif()
 
 # ---- the CardputerZero's .deb --------------------------------------------
 if(BOARD STREQUAL "cp0")

@@ -8,8 +8,9 @@
 // A tap puts the UI away; only a two-second hold brings it back, which is the
 // one input a pocket doesn't produce. A tap on a dark screen lights the
 // screensaver again. The screensaver is a schefflera bouncing slowly round a
-// black screen, carrying the Zello status and the channel's latest activity
-// with it (moving all of it keeps the AMOLED from burning in).
+// black screen, carrying one line of Zello status with it: the channel and
+// how many are listening, or who is talking (moving all of it keeps the
+// AMOLED from burning in).
 //
 // The screen button: BOOT on the T-Display-P4, Power on the Tanmatsu, Wake on
 // the Wio Tracker L2. The T-Deck has none to spare, so, as on camillia-mt,
@@ -40,7 +41,6 @@ static const char *TAG = "saver";
 #define TICK_MS        25
 #define MOVE_EVERY     2                 // ticks per bounce step
 #define TEXT_EVERY     20                // ticks per status refresh
-#define ACTIVITY_LINES 2
 
 #if CONFIG_ZELLO_BOARD_TANMATSU
 #define PLANT 150
@@ -59,13 +59,11 @@ static const char *TAG = "saver";
 typedef enum { SAVER_OFF, SAVER_ON, SAVER_DARK } saver_state_t;
 static volatile saver_state_t s_state;
 
-static lv_obj_t *s_overlay, *s_box, *s_status, *s_activity;
+static lv_obj_t *s_overlay, *s_box, *s_status;
 static uint32_t s_since;  // when the screensaver last lit
 static int32_t s_x, s_y, s_dx = STEP, s_dy = STEP;
 static uint32_t s_ticks;
 static char s_status_cache[160];
-static size_t s_log_seen = SIZE_MAX;
-static char s_talker_seen[64];  // who was shown talking, or "" for the log
 
 // ---- the plant -------------------------------------------------------------
 
@@ -138,29 +136,18 @@ static void refresh_text(bool force)
     zello_get_status(&st);
 
     char text[sizeof(s_status_cache)];
-    ui_zello_describe(&st, text, sizeof(text));
+    lv_color_t color;
+    if (st.receiving) {
+        snprintf(text, sizeof(text), LV_SYMBOL_VOLUME_MAX " %s is talking", st.talker[0] ? st.talker : "Someone");
+        color = UI_COLOR_STOP;
+    } else {
+        ui_zello_describe(&st, text, sizeof(text));
+        color = ui_zello_color(&st);
+    }
     if (force || strcmp(text, s_status_cache)) {
         strlcpy(s_status_cache, text, sizeof(s_status_cache));
         lv_label_set_text(s_status, text);
-        lv_obj_set_style_text_color(s_status, ui_zello_color(&st), 0);
-    }
-
-    if (st.receiving) {
-        const char *who = st.talker[0] ? st.talker : "Someone";
-        if (force || strcmp(who, s_talker_seen)) {
-            lv_label_set_text_fmt(s_activity, LV_SYMBOL_VOLUME_MAX " %s is talking", who);
-            lv_obj_set_style_text_color(s_activity, UI_COLOR_STOP, 0);
-            strlcpy(s_talker_seen, who, sizeof(s_talker_seen));
-        }
-        return;
-    }
-    char recent[ACTIVITY_LINES * 160];
-    size_t seen = zello_get_recent_log(recent, sizeof(recent), ACTIVITY_LINES);
-    if (force || s_talker_seen[0] || seen != s_log_seen) {
-        lv_label_set_text(s_activity, recent[0] ? recent : "No channel activity yet.");
-        lv_obj_set_style_text_color(s_activity, UI_COLOR_MUTED, 0);
-        s_log_seen = seen;
-        s_talker_seen[0] = 0;
+        lv_obj_set_style_text_color(s_status, color, 0);
     }
 }
 
@@ -190,13 +177,9 @@ static void show(const char *why)
 
     plant_create(s_box);
     s_status = ui_label(s_box, "", UI_FONT, UI_COLOR_MUTED);
-    s_activity = ui_label(s_box, "", UI_FONT_SMALL, UI_COLOR_MUTED);
-    lv_obj_t *labels[] = {s_status, s_activity};
-    for (size_t i = 0; i < 2; i++) {
-        lv_obj_set_width(labels[i], LV_PCT(100));
-        lv_label_set_long_mode(labels[i], LV_LABEL_LONG_WRAP);
-        lv_obj_set_style_text_align(labels[i], LV_TEXT_ALIGN_CENTER, 0);
-    }
+    lv_obj_set_size(s_status, LV_PCT(100), lv_font_get_line_height(UI_FONT));
+    lv_label_set_long_mode(s_status, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(s_status, LV_TEXT_ALIGN_CENTER, 0);
     refresh_text(true);
 
     lv_obj_update_layout(s_box);
@@ -214,7 +197,7 @@ static void wake(const char *why)
     if (s_state == SAVER_OFF) return;
     if (s_state == SAVER_DARK) display_backlight(true);
     lv_obj_delete(s_overlay);
-    s_overlay = s_box = s_status = s_activity = NULL;
+    s_overlay = s_box = s_status = NULL;
     s_state = SAVER_OFF;
     lv_display_trigger_activity(NULL);
     ESP_LOGI(TAG, "screen awake (%s)", why);

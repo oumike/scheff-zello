@@ -167,6 +167,13 @@ static void cancel_clicked(lv_event_t *e)
     close_settings();
 }
 
+// Esc on the keyboard: back to Home, as Cancel. A long Esc still quits the
+// app (the CardputerZero's HAL holds back the short one then).
+static void settings_escape(lv_event_t *e)
+{
+    if (s_root && lv_screen_active() == s_root) close_settings();
+}
+
 static void backup_clicked(lv_event_t *e)
 {
     ui_backup_save();
@@ -241,11 +248,16 @@ static void mic_gain_event(lv_event_t *e)
     lv_event_code_t code = lv_event_get_code(e);
     if (code == LV_EVENT_VALUE_CHANGED) {
         int db = lv_slider_get_value(lv_event_get_target(e));
-        g_settings.mic_gain = db;
         audio_set_mic_gain(db);
         lv_label_set_text_fmt(lv_event_get_user_data(e), "%d dB", db);
     } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST || code == LV_EVENT_DEFOCUSED) {
-        settings_save();
+        char value[4];
+        snprintf(value, sizeof(value), "%u", (unsigned)lv_slider_get_value(lv_event_get_target(e)));
+        if (settings_store("mic_gain", value) != ESP_OK) {
+            audio_set_mic_gain(g_settings.mic_gain);
+            lv_slider_set_value(lv_event_get_target(e), g_settings.mic_gain, LV_ANIM_OFF);
+            lv_label_set_text_fmt(lv_event_get_user_data(e), "%u dB", g_settings.mic_gain);
+        }
     }
 }
 
@@ -337,6 +349,7 @@ void ui_account_edit(void)
     s_onboarding = false;
 
     ui_title(col, "Settings");
+    ui_web_hint(col);
     ui_label(col, UI_OS_WIFI ? "Network" : "Wi-Fi", UI_FONT, UI_COLOR_ACCENT);
     build_wifi_fields(col, kb);
     ui_label(col, "Zello account", UI_FONT, UI_COLOR_ACCENT);
@@ -368,5 +381,6 @@ void ui_account_edit(void)
     ui_button(col, LV_SYMBOL_SAVE "  Save", UI_COLOR_GO, save_clicked, NULL);
     ui_button(col, "Cancel", UI_COLOR_PANEL, cancel_clicked, NULL);
 #endif
+    lv_obj_add_event_cb(s_root, settings_escape, LV_EVENT_CANCEL, NULL);
     lv_screen_load(s_root);
 }
