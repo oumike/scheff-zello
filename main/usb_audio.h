@@ -5,8 +5,8 @@
 #include "esp_err.h"
 
 // A USB audio adapter (UAC 1.0, e.g. a C-Media sound card) on the Tanmatsu's
-// USB-A host port. It adds a microphone and a headphone/speaker output; both
-// follow hot-plugging. Frames are AUDIO_FRAME mono samples at AUDIO_RATE: the
+// or Tab5's USB-A host port. It adds a microphone and a headphone/speaker
+// output (on the Tab5, in place of the built-in ones); both follow hot-plugging. Frames are AUDIO_FRAME mono samples at AUDIO_RATE: the
 // adapter's native rate (16 or 48 kHz) is converted here.
 
 esp_err_t usb_audio_init(void);

@@ -9,10 +9,15 @@ set(board_requires "")
 if(CONFIG_ZELLO_BOARD_TDECK)
     list(APPEND srcs "input_keys.c")
 elseif(CONFIG_ZELLO_BOARD_TANMATSU)
-    list(APPEND srcs "input_keys.c" "usb_audio.c")
-    list(APPEND board_requires badge-bsp usb usb_host_uac esp-hosted-tanmatsu)
+    list(APPEND srcs "input_keys.c")
+    list(APPEND board_requires badge-bsp esp-hosted-tanmatsu)
 elseif(CONFIG_ZELLO_BOARD_WIO_TRACKER_L2)
     list(APPEND srcs "lcd_nv3031b.c")
+endif()
+# A USB audio adapter on the USB-A host port (Tanmatsu, Tab5).
+if(CONFIG_ZELLO_USB_AUDIO)
+    list(APPEND srcs "usb_audio.c")
+    list(APPEND board_requires usb usb_host_uac)
 endif()
 
 idf_component_register(

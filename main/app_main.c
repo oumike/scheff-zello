@@ -55,16 +55,20 @@ void app_main(void)
     ESP_LOGI(TAG, "internal RAM before Wi-Fi: %u free, %u largest block",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
-    ESP_ERROR_CHECK(net_wifi_init());
+    // A radio that will not start (e.g. C6 slave firmware too old for the
+    // host's ESP-Hosted) must not boot-loop the device: keep the UI and the
+    // console up so the problem can be seen.
+    esp_err_t net_err = net_wifi_init();
+    if (net_err != ESP_OK) ESP_LOGE(TAG, "Wi-Fi unavailable: %s", esp_err_to_name(net_err));
     crash_report_start();
-    if (g_settings.wifi_ssid[0]) {
+    if (net_err == ESP_OK && g_settings.wifi_ssid[0]) {
         esp_err_t wifi_err = net_wifi_connect(g_settings.wifi_ssid, g_settings.wifi_pass);
         if (wifi_err != ESP_OK) ESP_LOGE(TAG, "Wi-Fi connection failed: %s", esp_err_to_name(wifi_err));
-    } else {
+    } else if (net_err == ESP_OK) {
         ESP_LOGW(TAG, "no Wi-Fi configured: set it up on screen, or use 'wifi <ssid> <password>'");
     }
 
-    web_config_start();
+    if (net_err == ESP_OK) web_config_start();
 
     ptt_button_start();
     if (disp_err == ESP_OK) {
@@ -79,7 +83,7 @@ void app_main(void)
 
     // The console and UI run in their own tasks. Keep waiting for a slow AP
     // here rather than allocating another task or abandoning boot login.
-    if (g_settings.auto_connect && g_settings.wifi_ssid[0]) {
+    if (net_err == ESP_OK && g_settings.auto_connect && g_settings.wifi_ssid[0]) {
         while (g_settings.auto_connect && !net_wifi_wait_ip(1000)) {}
         if (g_settings.auto_connect) {
             if (!net_wifi_wait_time(10000)) ESP_LOGW(TAG, "clock not set yet; the first sign-in may need a retry");

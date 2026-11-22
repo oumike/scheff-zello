@@ -34,6 +34,13 @@ menu "Zello Client"
         default 1 if ZELLO_BOARD_TANMATSU
         default 0
 
+    # 1 where a USB audio adapter on the USB-A host port is supported
+    # (usb_audio.c): the Tanmatsu and the Tab5. An int for the same reason.
+    config ZELLO_USB_AUDIO
+        int
+        default 1 if ZELLO_BOARD_TANMATSU || ZELLO_BOARD_TAB5
+        default 0
+
     choice ZELLO_NETWORK
         prompt "Zello network"
         default ZELLO_NETWORK_CONSUMER

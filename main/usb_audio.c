@@ -11,7 +11,9 @@
 #include "esp_log.h"
 #include "usb/usb_host.h"
 #include "usb/uac_host.h"
+#if CONFIG_ZELLO_BOARD_TANMATSU
 #include "bsp/power.h"
+#endif
 #include "audio.h"
 
 static const char *TAG = "usb_audio";
@@ -460,8 +462,11 @@ esp_err_t usb_audio_init(void)
     s_tx.lock = xSemaphoreCreateMutex();
     ESP_RETURN_ON_FALSE(s_rx_buf && s_tx_buf && s_events && s_rx.lock && s_tx.lock, ESP_ERR_NO_MEM, TAG, "alloc");
 
+#if CONFIG_ZELLO_BOARD_TANMATSU
     // 5 V for the USB-A port comes from the PMIC through the coprocessor.
     ESP_RETURN_ON_ERROR(bsp_power_set_usb_host_boost_enabled(true), TAG, "host boost");
+#endif
+    // The Tab5's USB-A 5 V is switched on with the I/O expanders (board.c).
 
     const usb_host_config_t host = {.skip_phy_setup = false, .intr_flags = ESP_INTR_FLAG_LOWMED};
     ESP_RETURN_ON_ERROR(usb_host_install(&host), TAG, "usb host");
