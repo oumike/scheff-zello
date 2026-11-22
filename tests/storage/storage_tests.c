@@ -1,5 +1,7 @@
 #include <stdint.h>
 #include <stdlib.h>
+#include <pthread.h>
+#include <sched.h>
 #include "channel_list.h"
 #include "file_store.h"
 #include "settings.h"
@@ -489,6 +491,55 @@ static int snapshot_failure(void)
     return 0;
 }
 
+static esp_err_t advance_settings(settings_t *values, void *ctx)
+{
+    (void)ctx;
+    unsigned next = (values->volume + 1) % 101;
+    sched_yield();
+    values->volume = next;
+    values->mic_gain = next % 43;
+    return ESP_OK;
+}
+
+static void *settings_writer(void *ctx)
+{
+    for (int i = 0; i < 200; i++)
+        if (settings_update(advance_settings, ctx) != ESP_OK) abort();
+    return NULL;
+}
+
+static esp_err_t rejected_settings(settings_t *values, void *ctx)
+{
+    (void)ctx;
+    strcpy(values->username, "uncommitted");
+    values->volume = 99;
+    return ESP_ERR_INVALID_ARG;
+}
+
+static int settings_transactions(void)
+{
+    CHECK(settings_load() == ESP_OK);
+    CHECK(settings_store("volume", "0") == ESP_OK);
+    pthread_t writers[4];
+    for (int i = 0; i < 4; i++) CHECK(pthread_create(&writers[i], NULL, settings_writer, NULL) == 0);
+    for (int i = 0; i < 4; i++) CHECK(pthread_join(writers[i], NULL) == 0);
+    settings_t before, after;
+    settings_get(&before);
+    CHECK(before.volume == 800 % 101 && before.mic_gain == (800 % 101) % 43);
+    CHECK(settings_update(rejected_settings, NULL) == ESP_ERR_INVALID_ARG);
+    settings_get(&after);
+    CHECK(!memcmp(&before, &after, sizeof(before)));
+    storage_fail_nvs_save = true;
+    CHECK(settings_store("username", "uncommitted") != ESP_OK);
+    settings_get(&after);
+    CHECK(!memcmp(&before, &after, sizeof(before)));
+    storage_fail_nvs_save = false;
+    CHECK(settings_load() == ESP_OK);
+    settings_get(&after);
+    CHECK(!memcmp(&before, &after, sizeof(before)));
+    return 0;
+}
+
 static int migration(void)
 {
     CHECK(nvs_set_str(1, "username", "legacy-user") == ESP_OK);
@@ -613,6 +664,7 @@ int main(int argc, char **argv)
         {"yaml-suffix", yaml_suffix}, {"yaml-valid", yaml_valid},
         {"yaml-completed-flow", yaml_completed_flow}, {"yaml-sections", yaml_sections},
         {"numeric-bounds", numeric_bounds}, {"snapshot-failure", snapshot_failure},
+        {"settings-transactions", settings_transactions},
         {"migration", migration}, {"invalid-snapshot", invalid_snapshot},
         {"migration-failure", migration_failure}, {"invalid-legacy", invalid_legacy},
         {"legacy-numeric-migration", legacy_numeric_migration}, {"legacy-numeric-max", legacy_numeric_max},

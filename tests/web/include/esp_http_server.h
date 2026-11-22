@@ -17,11 +17,14 @@ typedef struct {
     httpd_handle_t handle;
     const unsigned char *body;
     const char *query;
+    const char *cookie, *origin, *host;
+    void *user_ctx;
     size_t offset, chunk_size;
     int timeouts, recv_calls;
     unsigned recv_ticks;
     bool close_header;
     char status[40], response[16384];
+    char set_cookie[160];
 } httpd_req_t;
 
 typedef struct {
@@ -35,9 +38,12 @@ typedef struct {
     const char *uri;
     int method;
     esp_err_t (*handler)(httpd_req_t *);
+    void *user_ctx;
 } httpd_uri_t;
 
 int httpd_req_recv(httpd_req_t *req, char *out, size_t size);
+size_t httpd_req_get_hdr_value_len(httpd_req_t *req, const char *field);
+esp_err_t httpd_req_get_hdr_value_str(httpd_req_t *req, const char *field, char *out, size_t size);
 size_t httpd_req_get_url_query_len(httpd_req_t *req);
 esp_err_t httpd_req_get_url_query_str(httpd_req_t *req, char *out, size_t size);
 esp_err_t httpd_query_key_value(const char *query, const char *key, char *out, size_t size);
@@ -49,4 +55,5 @@ esp_err_t httpd_resp_sendstr(httpd_req_t *req, const char *data);
 esp_err_t httpd_resp_send_500(httpd_req_t *req);
 esp_err_t httpd_resp_send_chunk(httpd_req_t *req, const char *data, ssize_t size);
 esp_err_t httpd_start(httpd_handle_t *handle, const httpd_config_t *config);
+esp_err_t httpd_stop(httpd_handle_t handle);
 esp_err_t httpd_register_uri_handler(httpd_handle_t handle, const httpd_uri_t *uri);

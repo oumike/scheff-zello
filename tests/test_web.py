@@ -122,6 +122,7 @@ class HandlerTests(unittest.TestCase):
 
     def test_handler_behavior(self):
         cases = [
+            "auth-boundary", "auth-lifetime", "auth-rate-limit", "settings-transaction",
             "json-complete", "json-nul", "json-no-mutation",
             "json-timeout", "upload-timeout", "json-trickle", "upload-trickle",
             "body-lengths", "upload-nul", "body-fragmented",

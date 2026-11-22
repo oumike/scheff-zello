@@ -39,6 +39,12 @@ typedef struct {
 extern settings_t g_settings;
 
 esp_err_t settings_load(void);
+void settings_get(settings_t *out);
+// Mutate a private, current snapshot under the settings lock, then persist and
+// publish it. Failure leaves the live settings unchanged. The callback must
+// not call settings APIs or notify UI/network consumers while holding the lock.
+typedef esp_err_t (*settings_update_cb_t)(settings_t *values, void *ctx);
+esp_err_t settings_update(settings_update_cb_t update, void *ctx);
 // Atomically persists all fields as one NVS blob, leaving the prior snapshot
 // intact if the blob write fails. Legacy individual keys are not deleted.
 esp_err_t settings_save(void);
@@ -47,6 +53,10 @@ esp_err_t settings_save(void);
 // Returns ESP_ERR_NOT_FOUND for an unknown key, ESP_ERR_INVALID_ARG for a bad
 // value.
 esp_err_t settings_set(const char *key, const char *value);
+// The same parser for a transaction's private snapshot.
+esp_err_t settings_set_field(settings_t *values, const char *key, const char *value);
+// Set and persist one field in a single transaction.
+esp_err_t settings_store(const char *key, const char *value);
 void settings_print(void);
 
 // wss:// URL for the configured network, into `buf`.

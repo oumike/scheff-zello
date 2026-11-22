@@ -56,17 +56,16 @@ static int cmd_set(int argc, char **argv)
     }
     char value[SETTINGS_TOKEN_MAX];
     join(value, sizeof(value), argc, argv, 2);
-    esp_err_t err = settings_set(argv[1], value);
+    esp_err_t err = settings_store(argv[1], value);
     if (err == ESP_ERR_NOT_FOUND) {
         printf("Unknown key '%s'. Keys:\n", argv[1]);
         settings_print();
         return 1;
     }
     if (err != ESP_OK) {
-        printf("Invalid value\n");
+        printf("Couldn't save the value: %s\n", esp_err_to_name(err));
         return 1;
     }
-    settings_save();
     if (!strcmp(argv[1], "volume")) audio_set_volume(g_settings.volume);
     if (!strcmp(argv[1], "mic_gain")) audio_set_mic_gain(g_settings.mic_gain);
     if (!strncmp(argv[1], "wifi_", 5)) printf("Saved. Run 'wifi' to reconnect.\n");
@@ -77,12 +76,21 @@ static int cmd_set(int argc, char **argv)
     return 0;
 }
 
+static esp_err_t update_wifi(settings_t *values, void *ctx)
+{
+    const char *const *args = ctx;
+    esp_err_t err = settings_set_field(values, "wifi_ssid", args[0]);
+    return err == ESP_OK ? settings_set_field(values, "wifi_pass", args[1]) : err;
+}
+
 static int cmd_wifi(int argc, char **argv)
 {
     if (argc >= 2) {
-        strlcpy(g_settings.wifi_ssid, argv[1], sizeof(g_settings.wifi_ssid));
-        strlcpy(g_settings.wifi_pass, argc >= 3 ? argv[2] : "", sizeof(g_settings.wifi_pass));
-        settings_save();
+        const char *args[] = {argv[1], argc >= 3 ? argv[2] : ""};
+        if (settings_update(update_wifi, args) != ESP_OK) {
+            printf("Couldn't save the Wi-Fi settings.\n");
+            return 1;
+        }
     }
     if (!g_settings.wifi_ssid[0]) {
         net_wifi_print_status();

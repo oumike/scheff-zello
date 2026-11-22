@@ -19,12 +19,18 @@
 #include "crash_report.h"
 #include "file_store.h"
 #include "net_wifi.h"
+#include "nvs.h"
 #include "onboard.h"
 #include "sdcard.h"
 #include "settings.h"
 #include "xml_util.h"
 #include "yaml_util.h"
 #include "zello_client.h"
+#if CONFIG_ZELLO_BOARD_CARDPUTER_ZERO
+#include <unistd.h>
+#else
+#include "esp_random.h"
+#endif
 
 static const char *TAG = "web";
 
@@ -56,6 +62,13 @@ extern const char index_html_end[] asm("_binary_index_html_end");
 
 static httpd_handle_t s_httpd;
 static bool s_ap_stop_pending;
+#define ACCESS_CODE_LEN 10
+#define AUTH_WINDOW_MS 60000
+#define AUTH_ATTEMPTS 5
+#define SESSION_COOKIE "scheff_zello_session"
+static char s_access_code[ACCESS_CODE_LEN + 1], s_session[33];
+static TickType_t s_auth_window;
+static unsigned s_auth_failures;
 
 static struct {
     enum { JOIN_IDLE, JOIN_BUSY, JOIN_OK, JOIN_FAILED } state;
@@ -100,6 +113,107 @@ static esp_err_t send_ok(httpd_req_t *req)
     cJSON *root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "ok", true);
     return send_json(req, root);
+}
+
+static esp_err_t random_bytes(void *out, size_t size)
+{
+#if CONFIG_ZELLO_BOARD_CARDPUTER_ZERO
+    return getentropy(out, size) == 0 ? ESP_OK : ESP_FAIL;
+#else
+    esp_fill_random(out, size);
+    return ESP_OK;
+#endif
+}
+
+static esp_err_t auth_init(void)
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open("web", NVS_READWRITE, &h);
+    if (err != ESP_OK) return err;
+    size_t size = sizeof(s_access_code);
+    err = nvs_get_str(h, "access_code", s_access_code, &size);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        size_t digits = 0;
+        while (digits < ACCESS_CODE_LEN) {
+            uint8_t bytes[16];
+            err = random_bytes(bytes, sizeof(bytes));
+            if (err != ESP_OK) break;
+            for (size_t i = 0; i < sizeof(bytes) && digits < ACCESS_CODE_LEN; i++)
+                if (bytes[i] < 250) s_access_code[digits++] = '0' + bytes[i] % 10;
+        }
+        s_access_code[ACCESS_CODE_LEN] = 0;
+        if (err == ESP_OK) err = nvs_set_str(h, "access_code", s_access_code);
+        if (err == ESP_OK) err = nvs_commit(h);
+    } else if (err == ESP_OK && (size != sizeof(s_access_code) ||
+               strspn(s_access_code, "0123456789") != ACCESS_CODE_LEN)) {
+        err = ESP_ERR_INVALID_STATE;
+    }
+    nvs_close(h);
+    if (err != ESP_OK) return err;
+    uint8_t token[16];
+    err = random_bytes(token, sizeof(token));
+    if (err != ESP_OK) return err;
+    for (size_t i = 0; i < sizeof(token); i++) snprintf(s_session + i * 2, 3, "%02x", token[i]);
+    memset(token, 0, sizeof(token));
+    s_auth_failures = 0;
+    s_auth_window = xTaskGetTickCount();
+    return ESP_OK;
+}
+
+const char *web_config_access_code(void)
+{
+    return s_httpd ? s_access_code : NULL;
+}
+
+static bool secret_matches(const char *value, size_t size, const char *expected, size_t expected_size)
+{
+    if (size != expected_size) return false;
+    unsigned difference = 0;
+    for (size_t i = 0; i < size; i++) difference |= (unsigned char)value[i] ^ (unsigned char)expected[i];
+    return difference == 0;
+}
+
+static bool same_origin(httpd_req_t *req)
+{
+    char origin[192], host[160], expected[192];
+    esp_err_t err = httpd_req_get_hdr_value_str(req, "Origin", origin, sizeof(origin));
+    if (err == ESP_ERR_NOT_FOUND) return true;
+    if (err != ESP_OK || httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host)) != ESP_OK) return false;
+    snprintf(expected, sizeof(expected), "http://%s", host);
+    return !strcasecmp(origin, expected);
+}
+
+static bool authenticated(httpd_req_t *req)
+{
+    size_t size = httpd_req_get_hdr_value_len(req, "Cookie");
+    if (!size || size > 4096) return false;
+    char *cookie = malloc(size + 1);
+    if (!cookie) return false;
+    bool valid = false;
+    if (httpd_req_get_hdr_value_str(req, "Cookie", cookie, size + 1) == ESP_OK) {
+        for (const char *p = cookie; *p;) {
+            while (*p == ' ' || *p == '\t' || *p == ';') p++;
+            const char *end = p + strcspn(p, ";");
+            size_t prefix = sizeof(SESSION_COOKIE "=") - 1;
+            if ((size_t)(end - p) >= prefix && !strncmp(p, SESSION_COOKIE "=", prefix)) {
+                valid = secret_matches(p + prefix, (size_t)(end - p) - prefix, s_session, sizeof(s_session) - 1);
+                break;
+            }
+            p = end;
+        }
+    }
+    free(cookie);
+    return valid;
+}
+
+static esp_err_t h_authenticated(httpd_req_t *req)
+{
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    if (!same_origin(req)) return reject_request(req, "403 Forbidden", "Open the device's own web page.");
+    if (!authenticated(req)) return reject_request(req, "401 Unauthorized", "Enter the access code shown on the device.");
+    const httpd_uri_t *route = req->user_ctx;
+    req->user_ctx = route->user_ctx;
+    return route->handler(req);
 }
 
 static esp_err_t read_body(httpd_req_t *req, size_t max, bool external, char **out)
@@ -181,6 +295,36 @@ static cJSON *read_json(httpd_req_t *req)
     return j;
 }
 
+static esp_err_t h_unlock(httpd_req_t *req)
+{
+    if (!same_origin(req)) return reject_request(req, "403 Forbidden", "Open the device's own web page.");
+    TickType_t now = xTaskGetTickCount();
+    if ((TickType_t)(now - s_auth_window) >= pdMS_TO_TICKS(AUTH_WINDOW_MS)) {
+        s_auth_window = now;
+        s_auth_failures = 0;
+    }
+    if (s_auth_failures >= AUTH_ATTEMPTS) {
+        httpd_resp_set_hdr(req, "Retry-After", "60");
+        return reject_request(req, "429 Too Many Requests", "Too many attempts. Wait a minute, then try again.");
+    }
+    cJSON *j = read_json(req);
+    cJSON *code = j ? cJSON_GetObjectItemCaseSensitive(j, "code") : NULL;
+    bool valid = cJSON_IsString(code) &&
+                 secret_matches(code->valuestring, strlen(code->valuestring), s_access_code, ACCESS_CODE_LEN);
+    if (cJSON_IsString(code)) memset(code->valuestring, 0, strlen(code->valuestring));
+    cJSON_Delete(j);
+    if (!valid) {
+        s_auth_failures++;
+        return reject_request(req, "401 Unauthorized", "Incorrect access code.");
+    }
+    char cookie[128];
+    snprintf(cookie, sizeof(cookie), SESSION_COOKIE "=%s; HttpOnly; SameSite=Strict; Path=/", s_session);
+    httpd_resp_set_hdr(req, "Set-Cookie", cookie);
+    return send_ok(req);
+}
+
+static esp_err_t h_lock(httpd_req_t *req);
+
 static esp_err_t check_empty_body(httpd_req_t *req, bool allow_json)
 {
     if (!req->content_len) return ESP_OK;
@@ -192,6 +336,13 @@ static esp_err_t check_empty_body(httpd_req_t *req, bool allow_json)
     return reject_request(req, "400 Bad Request",
                           allow_json ? "Send an empty body or an empty JSON object."
                                      : "This request does not accept a body.");
+}
+
+static esp_err_t h_lock(httpd_req_t *req)
+{
+    if (check_empty_body(req, true) != ESP_OK) return ESP_FAIL;
+    httpd_resp_set_hdr(req, "Set-Cookie", SESSION_COOKIE "=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0");
+    return send_ok(req);
 }
 
 static const char *json_str(cJSON *obj, const char *key)
@@ -219,6 +370,8 @@ static bool json_string_field(cJSON *obj, const char *key, size_t size, bool req
 // always quoted, so a password full of punctuation survives a hand edit.
 static esp_err_t backup_write(yaml_write_cb_t write, void *ctx)
 {
+    settings_t settings;
+    settings_get(&settings);
     channel_entry_t *list = heap_caps_malloc(CHANNEL_LIST_MAX * sizeof(*list), MALLOC_CAP_SPIRAM);
     if (!list) return ESP_ERR_NO_MEM;
     size_t n = channel_list_get(NULL, false, list, CHANNEL_LIST_MAX);
@@ -230,18 +383,18 @@ static esp_err_t backup_write(yaml_write_cb_t write, void *ctx)
                                     "scheff-backup: 1\n"
                                     "settings:\n");
 #define W(call) do { if (err == ESP_OK) err = call; } while (0)
-    W(yaml_write_str(write, ctx, "  ", "network", g_settings.network == ZELLO_NET_WORK ? "work" : "consumer"));
-    W(yaml_write_str(write, ctx, "  ", "username", g_settings.username));
-    W(yaml_write_str(write, ctx, "  ", "password", g_settings.password));
-    W(yaml_write_str(write, ctx, "  ", "auth_token", g_settings.auth_token));
-    W(yaml_write_str(write, ctx, "  ", "work_network", g_settings.work_network));
-    W(yaml_write_str(write, ctx, "  ", "channel", g_settings.channel));
-    W(yaml_write_str(write, ctx, "  ", "wifi_ssid", g_settings.wifi_ssid));
-    W(yaml_write_str(write, ctx, "  ", "wifi_pass", g_settings.wifi_pass));
-    W(yaml_write_u32(write, ctx, "  ", "volume", g_settings.volume));
-    W(yaml_write_u32(write, ctx, "  ", "mic_gain", g_settings.mic_gain));
-    W(yaml_write_bool(write, ctx, "  ", "auto_connect", g_settings.auto_connect));
-    W(yaml_write_bool(write, ctx, "  ", "ptt_latch", g_settings.ptt_latch));
+    W(yaml_write_str(write, ctx, "  ", "network", settings.network == ZELLO_NET_WORK ? "work" : "consumer"));
+    W(yaml_write_str(write, ctx, "  ", "username", settings.username));
+    W(yaml_write_str(write, ctx, "  ", "password", settings.password));
+    W(yaml_write_str(write, ctx, "  ", "auth_token", settings.auth_token));
+    W(yaml_write_str(write, ctx, "  ", "work_network", settings.work_network));
+    W(yaml_write_str(write, ctx, "  ", "channel", settings.channel));
+    W(yaml_write_str(write, ctx, "  ", "wifi_ssid", settings.wifi_ssid));
+    W(yaml_write_str(write, ctx, "  ", "wifi_pass", settings.wifi_pass));
+    W(yaml_write_u32(write, ctx, "  ", "volume", settings.volume));
+    W(yaml_write_u32(write, ctx, "  ", "mic_gain", settings.mic_gain));
+    W(yaml_write_bool(write, ctx, "  ", "auto_connect", settings.auto_connect));
+    W(yaml_write_bool(write, ctx, "  ", "ptt_latch", settings.ptt_latch));
     W(yaml_write_text(write, ctx, n ? "channels:\n" : "channels: []\n"));
     for (size_t i = 0; i < n; i++) {
         W(yaml_write_str(write, ctx, "  - ", "name", list[i].name));
@@ -251,6 +404,7 @@ static esp_err_t backup_write(yaml_write_cb_t write, void *ctx)
     }
 #undef W
     free(list);
+    memset(&settings, 0, sizeof(settings));
     return err;
 }
 
@@ -264,21 +418,11 @@ typedef struct {
     int item;  // the list index `channels[count - 1]` came from
 } yaml_backup_t;
 
-static esp_err_t backup_yaml_value(void *ctx, const char *section, int item, const char *key, const char *value)
+static esp_err_t backup_yaml_setting(void *ctx, const char *section, int item, const char *key, const char *value)
 {
-    yaml_backup_t *b = ctx;
-    if (!section) {
-        // "zello-backup" is what the first YAML backups called it.
-        if (key && (!strcmp(key, "scheff-backup") || !strcmp(key, "zello-backup")) && strcmp(value, "1")) {
-            return ESP_ERR_INVALID_VERSION;
-        }
-        return ESP_OK;  // other top-level keys are not ours to judge
-    }
-
-    if (!strcmp(section, "settings")) {
-        b->has_settings = true;
-        if (!key) return ESP_OK;
-        settings_t *s = &b->settings;
+    (void)item;
+    if (section && !strcmp(section, "settings") && key) {
+        settings_t *s = ctx;
         uint32_t number;
 #define STR(field) \
     if (!strcmp(key, #field)) \
@@ -307,6 +451,23 @@ static esp_err_t backup_yaml_value(void *ctx, const char *section, int item, con
             if (!yaml_bool(value, &s->ptt_latch)) return ESP_ERR_INVALID_ARG;
         }
         return ESP_OK;
+    }
+    return ESP_OK;
+}
+
+static esp_err_t backup_yaml_value(void *ctx, const char *section, int item, const char *key, const char *value)
+{
+    yaml_backup_t *b = ctx;
+    if (!section) {
+        // "zello-backup" is what the first YAML backups called it.
+        if (key && (!strcmp(key, "scheff-backup") || !strcmp(key, "zello-backup")) && strcmp(value, "1")) {
+            return ESP_ERR_INVALID_VERSION;
+        }
+        return ESP_OK;
+    }
+    if (!strcmp(section, "settings")) {
+        b->has_settings = true;
+        return backup_yaml_setting(&b->settings, section, item, key, value);
     }
 
     if (!strcmp(section, "channels")) {
@@ -381,26 +542,48 @@ static esp_err_t backup_parse_settings_xml(const char *xml, settings_t *settings
 static void restored_wifi_task(void *arg)
 {
     vTaskDelay(pdMS_TO_TICKS(500));
-    net_wifi_connect(g_settings.wifi_ssid, g_settings.wifi_pass);
+    settings_t settings;
+    settings_get(&settings);
+    net_wifi_connect(settings.wifi_ssid, settings.wifi_pass);
     onboard_settings_changed();
     vTaskDelete(NULL);
 }
 
-static esp_err_t backup_apply_settings(const settings_t *settings, bool *wifi_changed, bool *reconnecting)
-{
-    settings_t previous = g_settings;
-    *wifi_changed = strcmp(settings->wifi_ssid, previous.wifi_ssid) ||
-                    strcmp(settings->wifi_pass, previous.wifi_pass);
-    *reconnecting = *wifi_changed && settings->wifi_ssid[0];
-    g_settings = *settings;
-    esp_err_t err = settings_save();
-    if (err != ESP_OK) {
-        g_settings = previous;
-        return err;
-    }
+typedef struct {
+    const settings_t *settings;
+    const char *yaml;
+    bool wifi_changed, reconnecting;
+} restore_settings_t;
 
-    audio_set_volume(g_settings.volume);
-    audio_set_mic_gain(g_settings.mic_gain);
+static esp_err_t restore_settings(settings_t *values, void *ctx)
+{
+    restore_settings_t *restore = ctx;
+    char ssid[sizeof(values->wifi_ssid)], pass[sizeof(values->wifi_pass)];
+    strlcpy(ssid, values->wifi_ssid, sizeof(ssid));
+    strlcpy(pass, values->wifi_pass, sizeof(pass));
+    // Merge partial YAML against the current snapshot, not the one captured
+    // before parsing and channel-list I/O.
+    esp_err_t err = ESP_OK;
+    if (restore->yaml) err = yaml_parse(restore->yaml, backup_yaml_setting, values, NULL);
+    else *values = *restore->settings;
+    restore->wifi_changed = strcmp(ssid, values->wifi_ssid) || strcmp(pass, values->wifi_pass);
+    restore->reconnecting = restore->wifi_changed && values->wifi_ssid[0];
+    memset(pass, 0, sizeof(pass));
+    return err;
+}
+
+static esp_err_t backup_apply_settings(const settings_t *settings, const char *yaml,
+                                      bool *wifi_changed, bool *reconnecting)
+{
+    restore_settings_t restore = {.settings = settings, .yaml = yaml};
+    esp_err_t err = settings_update(restore_settings, &restore);
+    if (err != ESP_OK) return err;
+    *wifi_changed = restore.wifi_changed;
+    *reconnecting = restore.reconnecting;
+    settings_t current;
+    settings_get(&current);
+    audio_set_volume(current.volume);
+    audio_set_mic_gain(current.mic_gain);
     zello_reconfigure();
     if (*reconnecting) {
         if (xTaskCreate(restored_wifi_task, "restore_wifi", 4096, NULL, 5, NULL) != pdPASS) {
@@ -420,12 +603,16 @@ static esp_err_t h_index(httpd_req_t *req)
     if (check_empty_body(req, false) != ESP_OK) return ESP_FAIL;
     httpd_resp_set_type(req, "text/html");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_set_hdr(req, "Content-Security-Policy", "frame-ancestors 'none'");
+    httpd_resp_set_hdr(req, "Referrer-Policy", "no-referrer");
     return httpd_resp_send(req, index_html_start, index_html_end - index_html_start - 1);
 }
 
 static esp_err_t h_status(httpd_req_t *req)
 {
     if (check_empty_body(req, false) != ESP_OK) return ESP_FAIL;
+    settings_t settings;
+    settings_get(&settings);
     zello_status_t zs;
     zello_get_status(&zs);
 
@@ -434,23 +621,23 @@ static esp_err_t h_status(httpd_req_t *req)
     bool sta = net_wifi_sta_ip(ip, sizeof(ip));
 
     cJSON *wifi = cJSON_AddObjectToObject(root, "wifi");
-    cJSON_AddStringToObject(wifi, "ssid", g_settings.wifi_ssid);
+    cJSON_AddStringToObject(wifi, "ssid", settings.wifi_ssid);
     cJSON_AddBoolToObject(wifi, "connected", sta);
     cJSON_AddStringToObject(wifi, "ip", ip);
 
     // Neither password nor the token ever leaves the device; only whether one
     // is stored.
     cJSON *acct = cJSON_AddObjectToObject(root, "account");
-    cJSON_AddStringToObject(acct, "network", g_settings.network == ZELLO_NET_WORK ? "work" : "consumer");
-    cJSON_AddStringToObject(acct, "username", g_settings.username);
-    cJSON_AddStringToObject(acct, "work_network", g_settings.work_network);
-    cJSON_AddBoolToObject(acct, "has_password", g_settings.password[0] != 0);
-    cJSON_AddBoolToObject(acct, "has_token", g_settings.auth_token[0] != 0);
+    cJSON_AddStringToObject(acct, "network", settings.network == ZELLO_NET_WORK ? "work" : "consumer");
+    cJSON_AddStringToObject(acct, "username", settings.username);
+    cJSON_AddStringToObject(acct, "work_network", settings.work_network);
+    cJSON_AddBoolToObject(acct, "has_password", settings.password[0] != 0);
+    cJSON_AddBoolToObject(acct, "has_token", settings.auth_token[0] != 0);
 
     static const char *const STATES[] = {"offline", "connecting", "signing_in", "online", "failed"};
     cJSON *zello = cJSON_AddObjectToObject(root, "zello");
     cJSON_AddStringToObject(zello, "state", STATES[zs.state]);
-    cJSON_AddStringToObject(zello, "channel", g_settings.channel);
+    cJSON_AddStringToObject(zello, "channel", settings.channel);
     cJSON_AddNumberToObject(zello, "users_online", zs.users_online);
     cJSON_AddBoolToObject(zello, "talking", zs.ptt);
     cJSON_AddBoolToObject(zello, "receiving", zs.receiving);
@@ -589,26 +776,35 @@ static esp_err_t h_account(httpd_req_t *req)
     return send_ok(req);
 }
 
-static esp_err_t h_audio(httpd_req_t *req)
+static esp_err_t update_audio(settings_t *values, void *ctx)
 {
-    cJSON *j = read_json(req);
-    if (!j) return reject_request(req, "400 Bad Request", "Bad request.");
+    cJSON *j = ctx;
     cJSON *volume = cJSON_GetObjectItemCaseSensitive(j, "volume");
     cJSON *gain = cJSON_GetObjectItemCaseSensitive(j, "mic_gain");
     cJSON *latch = cJSON_GetObjectItemCaseSensitive(j, "ptt_latch");
     if (cJSON_IsNumber(volume) && volume->valuedouble >= 0 && volume->valuedouble <= 100) {
-        g_settings.volume = (uint8_t)volume->valuedouble;
-        audio_set_volume(g_settings.volume);
+        values->volume = (uint8_t)volume->valuedouble;
     }
     if (cJSON_IsNumber(gain) && gain->valuedouble >= 0 && gain->valuedouble <= 42) {
-        g_settings.mic_gain = (uint8_t)gain->valuedouble;
-        audio_set_mic_gain(g_settings.mic_gain);
+        values->mic_gain = (uint8_t)gain->valuedouble;
     }
-    if (cJSON_IsBool(latch)) g_settings.ptt_latch = cJSON_IsTrue(latch);
+    if (cJSON_IsBool(latch)) values->ptt_latch = cJSON_IsTrue(latch);
+    return ESP_OK;
+}
+
+static esp_err_t h_audio(httpd_req_t *req)
+{
+    cJSON *j = read_json(req);
+    if (!j) return reject_request(req, "400 Bad Request", "Bad request.");
+    esp_err_t err = settings_update(update_audio, j);
     cJSON_Delete(j);
-    if (settings_save() != ESP_OK) {
+    if (err != ESP_OK) {
         return send_error(req, "500 Internal Server Error", "Couldn't save the audio settings.");
     }
+    settings_t settings;
+    settings_get(&settings);
+    audio_set_volume(settings.volume);
+    audio_set_mic_gain(settings.mic_gain);
     return send_ok(req);
 }
 
@@ -824,7 +1020,7 @@ static void import_yaml(const char *text, import_outcome_t *o)
         import_failed(o, "500 Internal Server Error", "Not enough memory for the import; nothing was changed.");
         return;
     }
-    b->settings = g_settings;
+    settings_get(&b->settings);
     b->channels = list;
 
     int line = 0;
@@ -853,7 +1049,7 @@ static void import_yaml(const char *text, import_outcome_t *o)
     }
 
     if (!o->fail && b->has_settings &&
-        backup_apply_settings(&b->settings, &o->wifi_changed, &o->reconnecting) != ESP_OK) {
+        backup_apply_settings(&b->settings, text, &o->wifi_changed, &o->reconnecting) != ESP_OK) {
         import_failed(o, "500 Internal Server Error",
                       o->channels_replaced ? "The channel list was restored, but the settings could not be saved."
                                            : "The settings could not be saved.");
@@ -895,7 +1091,7 @@ static void import_xml(const char *xml, import_outcome_t *o)
     }
     if (!o->channels_replaced) o->count = channel_list_count();
 
-    if (o->has_settings && backup_apply_settings(&restored, &o->wifi_changed, &o->reconnecting) != ESP_OK) {
+    if (o->has_settings && backup_apply_settings(&restored, NULL, &o->wifi_changed, &o->reconnecting) != ESP_OK) {
         import_failed(o, "500 Internal Server Error",
                       o->channels_replaced ? "The channel list was restored, but the settings could not be saved."
                                            : "The settings could not be saved.");
@@ -1232,19 +1428,27 @@ static void onboard_changed(void)
 
 esp_err_t web_config_start(void)
 {
+    if (s_httpd) return ESP_OK;
+    esp_err_t e = auth_init();
+    if (e != ESP_OK) {
+        ESP_LOGE(TAG, "web access-code initialization failed: %s", esp_err_to_name(e));
+        return e;
+    }
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port = WEB_CONFIG_PORT;
     cfg.max_uri_handlers = 24;
     cfg.lru_purge_enable = true;
     cfg.stack_size = 6144;
-    esp_err_t e = httpd_start(&s_httpd, &cfg);
+    e = httpd_start(&s_httpd, &cfg);
     if (e != ESP_OK) {
         ESP_LOGE(TAG, "httpd start: %s", esp_err_to_name(e));
         return e;
     }
 
-    static const httpd_uri_t uris[] = {
+    static httpd_uri_t uris[] = {
         {.uri = "/", .method = HTTP_GET, .handler = h_index},
+        {.uri = "/api/unlock", .method = HTTP_POST, .handler = h_unlock},
+        {.uri = "/api/lock", .method = HTTP_POST, .handler = h_lock},
         {.uri = "/api/status", .method = HTTP_GET, .handler = h_status},
         {.uri = "/api/log", .method = HTTP_GET, .handler = h_log},
         {.uri = "/api/scan", .method = HTTP_GET, .handler = h_scan},
@@ -1265,7 +1469,20 @@ esp_err_t web_config_start(void)
         {.uri = "/api/crash/file", .method = HTTP_GET, .handler = h_crash_file},
         {.uri = "/api/crash/delete", .method = HTTP_POST, .handler = h_crash_delete},
     };
-    for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) httpd_register_uri_handler(s_httpd, &uris[i]);
+    for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
+        httpd_uri_t route = uris[i];
+        if (route.handler != h_index && route.handler != h_unlock) {
+            route.handler = h_authenticated;
+            route.user_ctx = &uris[i];
+        }
+        e = httpd_register_uri_handler(s_httpd, &route);
+        if (e != ESP_OK) {
+            ESP_LOGE(TAG, "registering web route: %s", esp_err_to_name(e));
+            httpd_stop(s_httpd);
+            s_httpd = NULL;
+            return e;
+        }
+    }
 
     onboard_set_web_cb(onboard_changed);
 

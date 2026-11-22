@@ -455,23 +455,28 @@ void ui_run_async(const char *name, void (*fn)(void *), void *arg)
 
 void ui_web_hint_update(lv_obj_t *label)
 {
+    const char *code = web_config_access_code();
+    if (!code) {
+        lv_label_set_text(label, "Web configuration unavailable.");
+        return;
+    }
     char ip[16];
     bool sta = net_wifi_sta_ip(ip, sizeof(ip));
     if (net_wifi_ap_active() && sta) {
         lv_label_set_text_fmt(label,
                               LV_SYMBOL_SETTINGS " Or use a browser: open http://%s, or join Wi-Fi \"%s\" "
-                              "and open http://192.168.4.1",
-                              ip, net_wifi_ap_ssid());
+                              "and open http://192.168.4.1\nAccess code: %s",
+                              ip, net_wifi_ap_ssid(), code);
     } else if (net_wifi_ap_active()) {
         lv_label_set_text_fmt(label,
                               LV_SYMBOL_SETTINGS " Or set up from a phone or computer: join Wi-Fi \"%s\", "
-                              "then open http://192.168.4.1",
-                              net_wifi_ap_ssid());
+                              "then open http://192.168.4.1\nAccess code: %s",
+                              net_wifi_ap_ssid(), code);
     } else if (sta) {
 #if WEB_CONFIG_PORT != 80
-        lv_label_set_text_fmt(label, LV_SYMBOL_SETTINGS " Web config: http://%s:%d", ip, WEB_CONFIG_PORT);
+        lv_label_set_text_fmt(label, "Web: %s:%d  Code: %s", ip, WEB_CONFIG_PORT, code);
 #else
-        lv_label_set_text_fmt(label, LV_SYMBOL_SETTINGS " Web config: http://%s", ip);
+        lv_label_set_text_fmt(label, "Web: %s  Code: %s", ip, code);
 #endif
     } else {
         lv_label_set_text(label, "");

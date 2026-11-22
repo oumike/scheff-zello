@@ -60,6 +60,8 @@ esp_err_t httpd_stop(httpd_handle_t handle);
 esp_err_t httpd_register_uri_handler(httpd_handle_t handle, const httpd_uri_t *uri);
 
 int httpd_req_recv(httpd_req_t *r, char *buf, size_t len);
+size_t httpd_req_get_hdr_value_len(httpd_req_t *r, const char *field);
+esp_err_t httpd_req_get_hdr_value_str(httpd_req_t *r, const char *field, char *buf, size_t len);
 esp_err_t httpd_req_get_url_query_str(httpd_req_t *r, char *buf, size_t len);
 esp_err_t httpd_query_key_value(const char *qry, const char *key, char *val, size_t len);
 

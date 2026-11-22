@@ -20,7 +20,7 @@ class StorageTests(unittest.TestCase):
         cls.binary = cls.build / "storage-tests"
         sources = ["settings.c", "channel_list.c", "xml_util.c", "yaml_util.c", "file_store.c"]
         command = [
-            os.environ.get("CC", "cc"), "-std=c11", "-Wall", "-Wextra", "-Werror",
+            os.environ.get("CC", "cc"), "-std=c11", "-pthread", "-Wall", "-Wextra", "-Werror",
             "-D_GNU_SOURCE", "-I", str(ROOT / "tests" / "storage" / "include"),
             "-I", str(ROOT / "main"),
             "-include", str(ROOT / "tests" / "storage" / "host.h"),
@@ -103,6 +103,9 @@ class StorageTests(unittest.TestCase):
 
     def test_failed_settings_save_does_not_mix_credentials(self):
         self.run_case("snapshot-failure")
+
+    def test_settings_updates_serialize_and_failed_updates_do_not_publish(self):
+        self.run_case("settings-transactions")
 
     def test_legacy_settings_migrate_without_loss(self):
         self.run_case("migration")

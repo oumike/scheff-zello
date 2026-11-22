@@ -1012,8 +1012,7 @@ void zello_reconfigure(void)
 esp_err_t zello_set_channel(const char *name)
 {
     if (name && name[0]) {
-        strlcpy(g_settings.channel, name, sizeof(g_settings.channel));
-        esp_err_t err = settings_save();
+        esp_err_t err = settings_store("channel", name);
         if (err != ESP_OK) return err;
     }
     zello_reconfigure();

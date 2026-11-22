@@ -59,6 +59,20 @@ button:disabled{opacity:.5;cursor:default}
 <h1>Scheff <span>for</span> Zello</h1>
 <p class="sub">Set up Wi-Fi, your Zello account and a channel. The device screen follows along.</p>
 
+<section id="access">
+  <h2>Unlock web configuration</h2>
+  <form id="unlock-form">
+    <label for="access-code">Access code shown on the device</label>
+    <input id="access-code" type="password" inputmode="numeric" minlength="10" maxlength="10"
+      pattern="[0-9]{10}" autocomplete="current-password" required>
+    <button id="unlock" class="go" type="submit">Unlock</button>
+  </form>
+  <div id="access-msg" class="msg"></div>
+  <p class="hint">Find the code on the device's setup screen or in Settings. It stays the same after a restart.
+    HTTP is not encrypted; use a trusted network.</p>
+</section>
+<div id="config" hidden>
+<button id="lock" class="plain" type="button">Lock web configuration</button>
 <section id="s-status">
   <h2>Status</h2>
   <div id="status">Loading…</div>
@@ -166,10 +180,12 @@ button:disabled{opacity:.5;cursor:default}
   <div id="smsg" class="msg"></div>
   <button id="save" class="go" type="button" disabled>No unsaved changes</button>
 </div>
+</div>
 </main>
 <script>
 const $=id=>document.getElementById(id);
 let joining=false,filled=false,audioFilled=false,saving=false,wifiEdited=false;
+let locked=false;
 // Unsaved edits per group: Save sends only those, so a volume change does not
 // make the device sign in to Zello again.
 const dirty={account:false,audio:false,channel:false};
@@ -189,12 +205,40 @@ function textError(value,max,label){
   if(value.includes('\0'))return label+' cannot contain a NUL character.';
   return new TextEncoder().encode(value).length>max?label+' must fit in '+max+' UTF-8 bytes.':'';
 }
+function setLocked(value){
+  locked=value;
+  $('access').hidden=!value;
+  $('config').hidden=value;
+}
+async function webRequest(path,options={}){
+  const r=await fetch(path,{credentials:'same-origin',...options});
+  if(r.status===401)setLocked(true);
+  return r;
+}
 async function api(path,body){
-  const r=await fetch(path,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});
+  const r=await webRequest(path,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});
   const j=await r.json().catch(()=>({}));
   if(!r.ok) throw new Error(j.error||('HTTP '+r.status));
   return j;
 }
+$('unlock-form').onsubmit=async e=>{
+  e.preventDefault();
+  $('unlock').disabled=true;
+  try{
+    await api('/api/unlock',{code:$('access-code').value});
+    $('access-code').value='';$('access-msg').className='msg';
+    setLocked(false);
+    await refresh();loadChannels();loadCrash();refreshLog();
+  }catch(err){msg($('access-msg'),'err',err.message)}
+  finally{$('unlock').disabled=false}
+};
+$('lock').onclick=async()=>{
+  try{
+    await api('/api/lock',{});
+    $('apass').value=$('token').value=$('wpass').value='';
+    setLocked(true);
+  }catch(err){msg($('smsg'),'err',err.message)}
+};
 const ZSTATE={offline:'offline',connecting:'connecting…',signing_in:'signing in…',online:'online',failed:'sign-in failed'};
 function showNetworkFields(){
   const work=$('network').value==='work';
@@ -218,9 +262,11 @@ function applyDevice(d){
   $('sdi').textContent='Import '+sdFrom;
 }
 async function refresh(){
+  if(locked)return;
   const observed={...revision};
   let s;
   try{s=await api('/api/status')}catch(e){$('status').textContent='Device not reachable - it may be switching networks. Retrying…';return}
+  setLocked(false);
   const w=s.wifi,a=s.account,z=s.zello;
   if(s.device)applyDevice(s.device);
   $('status').innerHTML=
@@ -256,6 +302,7 @@ async function refresh(){
   $('join').disabled=j.state==='joining';
 }
 async function refreshLog(){
+  if(locked)return;
   try{const j=await api('/api/log');
     const el=$('log'),bottom=el.scrollTop+el.clientHeight>=el.scrollHeight-8;
     el.textContent=j.log||'Channel activity shows up here.';
@@ -364,6 +411,7 @@ function renderChannels(){
     :'<p class="hint">'+(q?'No channels match “'+esc(q)+'”.':'No channels yet. Tap “Add a channel”.')+'</p>';
 }
 async function loadChannels(){
+  if(locked)return;
   const q=$('q').value.trim();
   $('clist').innerHTML='<p class="hint">Loading…</p>';
   try{channels=await api('/api/channels'+(q?'?q='+encodeURIComponent(q):''))}
@@ -440,7 +488,7 @@ $('upfile').onchange=async e=>{
   if(saving||!f||!confirm('Restore settings and replace the channel list from '+f.name+'?'))return;
   const submitted={...revision};saving=true;saveButton();
   msg($('bmsg'),'busy','Importing '+f.name+'…');
-  try{const r=await fetch('/api/import',{method:'POST',headers:{'Content-Type':'application/yaml'},body:await f.text()});
+  try{const r=await webRequest('/api/import',{method:'POST',headers:{'Content-Type':'application/yaml'},body:await f.text()});
     const j=await r.json();if(!r.ok)throw new Error(j.error||'Import failed');
     const done=restored(j);
     msg($('bmsg'),'ok',done+(j.reconnecting?' The device is reconnecting to the restored Wi-Fi network.':''));
@@ -466,6 +514,7 @@ $('sdi').onclick=async()=>{
 };
 // ---- crash reports ----
 async function loadCrash(){
+  if(locked)return;
   $('crashlist').innerHTML='<p class="hint">Loading…</p>';
   try{const j=await api('/api/crash');
     $('crashinfo').innerHTML=row('Last reset',esc(j.last_reset));
@@ -483,10 +532,9 @@ $('crashdel').onclick=async()=>{
   catch(e){msg($('xmsg'),'err',e.message)}
 };
 showNetworkFields();
-loadChannels();
-loadCrash();
-refresh();setInterval(refresh,2000);
-refreshLog();setInterval(refreshLog,2000);
+refresh().then(()=>{loadChannels();loadCrash();refreshLog()});
+setInterval(refresh,2000);
+setInterval(refreshLog,2000);
 </script>
 </body>
 </html>

@@ -2,6 +2,7 @@
 
 #include <string.h>
 #include <strings.h>
+#include <stdatomic.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -17,7 +18,7 @@ static const char *TAG = "onboard";
 
 static void (*s_ui_cb)(void);
 static void (*s_web_cb)(void);
-static bool s_restart_pending;
+static atomic_bool s_restart_pending;
 
 static void wifi_restart_task(void *arg)
 {
@@ -36,36 +37,92 @@ bool onboard_wifi_done(void)
 #if CONFIG_ZELLO_BOARD_CARDPUTER_ZERO
     return true;  // the OS owns the network
 #else
-    return g_settings.wifi_ssid[0] != 0;
+    settings_t settings;
+    settings_get(&settings);
+    return settings.wifi_ssid[0] != 0;
 #endif
 }
 
 bool onboard_account_done(void)
 {
-    if (!g_settings.username[0] || !g_settings.password[0]) return false;
-    if (g_settings.network == ZELLO_NET_CONSUMER) return g_settings.auth_token[0] != 0;
-    return g_settings.work_network[0] != 0;
+    settings_t settings;
+    settings_get(&settings);
+    if (!settings.username[0] || !settings.password[0]) return false;
+    if (settings.network == ZELLO_NET_CONSUMER) return settings.auth_token[0] != 0;
+    return settings.work_network[0] != 0;
 }
 
 bool onboard_channel_done(void)
 {
-    return g_settings.channel[0] != 0;
+    settings_t settings;
+    settings_get(&settings);
+    return settings.channel[0] != 0;
+}
+
+static esp_err_t update_wifi(settings_t *values, void *ctx)
+{
+    const char *const *args = ctx;
+    esp_err_t err = settings_set_field(values, "wifi_ssid", args[0]);
+    return err == ESP_OK ? settings_set_field(values, "wifi_pass", args[1]) : err;
 }
 
 esp_err_t onboard_save_wifi(const char *ssid, const char *pass)
 {
-    strlcpy(g_settings.wifi_ssid, ssid, sizeof(g_settings.wifi_ssid));
-    strlcpy(g_settings.wifi_pass, pass ? pass : "", sizeof(g_settings.wifi_pass));
-    esp_err_t err = settings_save();
+    const char *args[] = {ssid, pass ? pass : ""};
+    esp_err_t err = settings_update(update_wifi, args);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "could not save Wi-Fi settings: %s", esp_err_to_name(err));
         return err;
     }
     notify();
-    if (!s_restart_pending) {
-        s_restart_pending = true;
+    if (!atomic_exchange(&s_restart_pending, true)) {
         ESP_LOGI(TAG, "Wi-Fi onboarding complete; restarting in %d ms", WIFI_RESTART_DELAY_MS);
         if (xTaskCreate(wifi_restart_task, "wifi_restart", 2048, NULL, 3, NULL) != pdPASS) esp_restart();
+    }
+    return ESP_OK;
+}
+
+typedef struct {
+    const char *network, *username, *password, *token, *work_network;
+    const char *error;
+} account_update_t;
+
+static esp_err_t update_account(settings_t *values, void *ctx)
+{
+    account_update_t *a = ctx;
+
+    if (a->network && a->network[0]) {
+        if (settings_set_field(values, "network", a->network) != ESP_OK) {
+            a->error = "Choose either the consumer network or Zello Work.";
+            return ESP_ERR_INVALID_ARG;
+        }
+    }
+
+    if (!a->username || !a->username[0]) {
+        a->error = "Enter your Zello username.";
+        return ESP_ERR_INVALID_ARG;
+    }
+    // Blank means "keep what's stored": neither the web page nor the screen
+    // ever displays the saved password or token.
+    if (settings_set_field(values, "username", a->username) != ESP_OK ||
+        (a->password && a->password[0] && settings_set_field(values, "password", a->password) != ESP_OK) ||
+        (a->token && a->token[0] && settings_set_field(values, "auth_token", a->token) != ESP_OK) ||
+        (a->work_network && settings_set_field(values, "work_network", a->work_network) != ESP_OK)) {
+        a->error = "An account field is too long.";
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!values->password[0]) {
+        a->error = "Enter your Zello password.";
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (values->network == ZELLO_NET_CONSUMER && !values->auth_token[0]) {
+        a->error = "The consumer network needs a developer token from developers.zello.com.";
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (values->network == ZELLO_NET_WORK && !values->work_network[0]) {
+        a->error = "Enter your Zello Work network name.";
+        return ESP_ERR_INVALID_ARG;
     }
     return ESP_OK;
 }
@@ -73,47 +130,10 @@ esp_err_t onboard_save_wifi(const char *ssid, const char *pass)
 esp_err_t onboard_save_account(const char *network, const char *username, const char *password, const char *token,
                                const char *work_network, const char **err)
 {
-    settings_t previous = g_settings;
-
-    if (network && network[0]) {
-        if (settings_set("network", network) != ESP_OK) {
-            if (err) *err = "Choose either the consumer network or Zello Work.";
-            return ESP_ERR_INVALID_ARG;
-        }
-    }
-
-    if (!username || !username[0]) {
-        g_settings = previous;
-        if (err) *err = "Enter your Zello username.";
-        return ESP_ERR_INVALID_ARG;
-    }
-    strlcpy(g_settings.username, username, sizeof(g_settings.username));
-    // Blank means "keep what's stored": neither the web page nor the screen
-    // ever displays the saved password or token.
-    if (password && password[0]) strlcpy(g_settings.password, password, sizeof(g_settings.password));
-    if (token && token[0]) strlcpy(g_settings.auth_token, token, sizeof(g_settings.auth_token));
-    if (work_network) strlcpy(g_settings.work_network, work_network, sizeof(g_settings.work_network));
-
-    if (!g_settings.password[0]) {
-        g_settings = previous;
-        if (err) *err = "Enter your Zello password.";
-        return ESP_ERR_INVALID_ARG;
-    }
-    if (g_settings.network == ZELLO_NET_CONSUMER && !g_settings.auth_token[0]) {
-        g_settings = previous;
-        if (err) *err = "The consumer network needs a developer token from developers.zello.com.";
-        return ESP_ERR_INVALID_ARG;
-    }
-    if (g_settings.network == ZELLO_NET_WORK && !g_settings.work_network[0]) {
-        g_settings = previous;
-        if (err) *err = "Enter your Zello Work network name.";
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    esp_err_t e = settings_save();
+    account_update_t update = {network, username, password, token, work_network, NULL};
+    esp_err_t e = settings_update(update_account, &update);
     if (e != ESP_OK) {
-        g_settings = previous;
-        if (err) *err = "Couldn't save the settings.";
+        if (err) *err = update.error ? update.error : "Couldn't save the settings.";
         return e;
     }
     zello_reconfigure();

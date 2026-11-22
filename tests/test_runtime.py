@@ -48,8 +48,94 @@ class RuntimeTests(unittest.TestCase):
             ]
             result = subprocess.run(command, input=source, text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-            result = subprocess.run([binary], text=True, capture_output=True, timeout=15)
+            result = subprocess.run([binary], cwd=directory, text=True, capture_output=True, timeout=15)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_linux_nvs_concurrent_short_writes_and_durability_errors(self):
+        self.run_c(r"""
+#include <assert.h>
+#include <errno.h>
+#include <pthread.h>
+#include <stdatomic.h>
+#include <stdbool.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+static _Thread_local bool split_write;
+static atomic_bool half_written;
+static bool fail_sync, fail_close;
+static ssize_t probe_write(int fd, const void *data, size_t size) {
+    if (split_write && size > 1) {
+        split_write = false;
+        ssize_t n = write(fd, data, size / 2);
+        atomic_store(&half_written, true);
+        usleep(150000);
+        return n;
+    }
+    return write(fd, data, size);
+}
+static int probe_fsync(int fd) {
+    struct stat st;
+    assert(fstat(fd, &st) == 0);
+    if (fail_sync && S_ISREG(st.st_mode)) {errno = EIO; return -1;}
+    return fsync(fd);
+}
+static int probe_close(int fd) {
+    struct stat st;
+    assert(fstat(fd, &st) == 0);
+    int result = close(fd);
+    if (fail_close && S_ISREG(st.st_mode)) {errno = EIO; return -1;}
+    return result;
+}
+#define write probe_write
+#define fsync probe_fsync
+#define close probe_close
+""" + f'#include "{ROOT / "linux/compat/nvs.c"}"\n' + r"""
+#undef write
+#undef fsync
+#undef close
+static nvs_handle_t a, b;
+static void *writer_a(void *arg) {
+    (void)arg; unsigned char data[128]; memset(data, 'A', sizeof(data));
+    split_write = true;
+    assert(nvs_set_blob(a, "snapshot", data, sizeof(data)) == ESP_OK);
+    assert(nvs_commit(a) == ESP_OK);
+    return NULL;
+}
+static void *writer_b(void *arg) {
+    (void)arg; unsigned char data[128]; memset(data, 'B', sizeof(data));
+    while (!atomic_load(&half_written)) usleep(1000);
+    assert(nvs_set_blob(b, "snapshot", data, sizeof(data)) == ESP_OK);
+    assert(nvs_commit(b) == ESP_OK);
+    return NULL;
+}
+int main(void) {
+    assert(nvs_flash_init() == ESP_OK);
+    assert(nvs_open("zello", NVS_READWRITE, &a) == ESP_OK);
+    assert(nvs_open("zello", NVS_READWRITE, &b) == ESP_OK && a != b);
+    pthread_t ta, tb;
+    assert(pthread_create(&ta, NULL, writer_a, NULL) == 0);
+    assert(pthread_create(&tb, NULL, writer_b, NULL) == 0);
+    pthread_join(ta, NULL); pthread_join(tb, NULL);
+    unsigned char got[128]; size_t size = sizeof(got);
+    assert(nvs_get_blob(a, "snapshot", got, &size) == ESP_OK && size == sizeof(got));
+    assert(got[0] == 'A' || got[0] == 'B');
+    for (size_t i = 1; i < size; i++) assert(got[i] == got[0]);
+    for (int which = 0; which < 2; which++) {
+        nvs_close(b);
+        assert(nvs_open("zello", NVS_READWRITE, &b) == ESP_OK);
+        fail_sync = which == 0; fail_close = which == 1;
+        assert(nvs_set_blob(b, "snapshot", "new", 3) != ESP_OK);
+        assert(nvs_commit(b) != ESP_OK);
+        fail_sync = fail_close = false;
+        unsigned char after[128]; size_t n = sizeof(after);
+        assert(nvs_get_blob(a, "snapshot", after, &n) == ESP_OK && n == size);
+        assert(!memcmp(got, after, size));
+    }
+    nvs_close(a); nvs_close(b);
+    assert(nvs_commit(a) != ESP_OK);
+}
+""")
 
     def test_websocket_continuations_and_interleaved_ping(self):
         body = (ROOT / "main/zello_client.c").read_text().split(

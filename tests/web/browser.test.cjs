@@ -52,7 +52,7 @@ const settle = async () => {
   for (let i = 0; i < 3; i++) await new Promise(resolve => setImmediate(resolve));
 };
 
-async function page({holdInitialStatus = false} = {}) {
+async function page({holdInitialStatus = false, authenticated = true} = {}) {
   const elements = new Map([...html.matchAll(/\bid="([^"]+)"/g)]
     .map(match => [match[1], new Element()]));
   elements.get('network').value = 'consumer';
@@ -65,7 +65,10 @@ async function page({holdInitialStatus = false} = {}) {
       return elements.get(id);
     }},
     fetch: async (url, options = {}) => {
-      requests.push({url, body: options.body ? JSON.parse(options.body) : undefined});
+      requests.push({url, options, body: options.body ? JSON.parse(options.body) : undefined});
+      if (url === '/api/unlock') authenticated = true;
+      else if (url === '/api/lock') authenticated = false;
+      else if (!authenticated) return {ok: false, status: 401, json: async () => ({error: 'Access code required'})};
       const wait = pending.get(url)?.shift();
       const data = wait ? await wait.promise :
         url === '/api/status' ? structuredClone(status) :
@@ -100,6 +103,26 @@ async function page({holdInitialStatus = false} = {}) {
     save: () => elements.get('save').onclick(),
   };
 }
+
+test('locked pages do not expose settings and unlock resumes authenticated requests', async () => {
+  const p = await page({authenticated: false});
+  assert.equal(p.el('config').hidden, true);
+  assert.equal(p.el('access').hidden, false);
+  assert.equal(p.requests.some(r => r.url === '/api/channels'), false);
+  p.input('access-code', '0123456789');
+  await p.el('unlock-form').onsubmit({preventDefault() {}});
+  await settle();
+  assert.equal(p.el('config').hidden, false);
+  assert.equal(p.el('access').hidden, true);
+  assert.equal(p.el('access-code').value, '');
+  assert.equal(p.el('user').value, 'stored-user');
+  assert.ok(p.requests.every(r => r.options.credentials === 'same-origin'));
+  await p.el('lock').onclick();
+  assert.equal(p.el('config').hidden, true);
+  const count = p.requests.length;
+  await p.run('refresh()');
+  assert.equal(p.requests.length, count);
+});
 
 test('Wi-Fi joins preserve the exact SSID, including whitespace', async () => {
   const p = await page();

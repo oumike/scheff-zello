@@ -36,6 +36,10 @@ static channel_entry_t saved[CHANNEL_LIST_MAX];
 static size_t saved_count;
 static int settings_writes, fail_heap, fail_open, fail_write, fail_flush, fail_close;
 static int sd_mount_calls, crash_deletions;
+static int fail_settings, change_volume_on_replace, fail_auth_storage;
+static char stored_code[ACCESS_CODE_LEN + 1];
+static httpd_uri_t routes[24];
+static size_t route_count;
 static TickType_t ticks;
 settings_t g_settings;
 const char index_html_start[] = "";
@@ -66,6 +70,7 @@ static void reset(void)
     settings_writes = fail_heap = fail_open = fail_write = fail_flush = fail_close = 0;
     sd_mount_calls = crash_deletions = 0;
     ticks = 0;
+    fail_settings = change_volume_on_replace = fail_auth_storage = 0;
     s_join.state = JOIN_IDLE;
 }
 
@@ -598,6 +603,108 @@ static int test_sd_nul(void)
     return 0;
 }
 
+static esp_err_t dispatch(httpd_req_t *req, const char *path, int method)
+{
+    for (size_t i = 0; i < route_count; i++) {
+        if (routes[i].method == method && !strcmp(routes[i].uri, path)) {
+            req->user_ctx = routes[i].user_ctx;
+            return routes[i].handler(req);
+        }
+    }
+    return ESP_ERR_NOT_FOUND;
+}
+
+static int test_auth_boundary(void)
+{
+    CHECK(web_config_start() == ESP_OK);
+    strcpy(g_settings.password, "synthetic-account-secret");
+    strcpy(g_settings.auth_token, "synthetic-developer-token");
+    strcpy(g_settings.wifi_pass, "synthetic-wifi-secret");
+    for (size_t i = 0; i < route_count; i++) {
+        if (!strcmp(routes[i].uri, "/") || !strcmp(routes[i].uri, "/api/unlock")) continue;
+        httpd_req_t req = json_request(routes[i].method == HTTP_POST ? "{}" : "");
+        CHECK(dispatch(&req, routes[i].uri, routes[i].method) != ESP_OK);
+        CHECK(!strncmp(req.status, "401", 3) && req.recv_calls == 0);
+        CHECK(!strstr(req.response, "synthetic-") && settings_writes == 0);
+        CHECK(saved_count == 1 && sd_mount_calls == 0 && crash_deletions == 0);
+    }
+    char body[64];
+    snprintf(body, sizeof(body), "{\"code\":\"%s\"}", web_config_access_code());
+    httpd_req_t login = json_request(body);
+    CHECK(dispatch(&login, "/api/unlock", HTTP_POST) == ESP_OK);
+    CHECK(strstr(login.set_cookie, "HttpOnly") && strstr(login.set_cookie, "SameSite=Strict"));
+    httpd_req_t export = json_request("");
+    export.cookie = login.set_cookie;
+    CHECK(dispatch(&export, "/api/export", HTTP_GET) == ESP_OK);
+    CHECK(strstr(export.response, g_settings.password) && strstr(export.response, g_settings.auth_token));
+    CHECK(strstr(export.response, g_settings.wifi_pass));
+    CHECK(!strstr(export.response, s_access_code) && !strstr(export.response, s_session));
+    httpd_req_t cross_site = json_request("{\"volume\":99}");
+    cross_site.cookie = login.set_cookie;
+    cross_site.host = "192.0.2.1:8960";
+    cross_site.origin = "http://192.0.2.1:8080";
+    CHECK(dispatch(&cross_site, "/api/audio", HTTP_POST) != ESP_OK);
+    CHECK(!strncmp(cross_site.status, "403", 3) && g_settings.volume == 40);
+    return 0;
+}
+
+static int test_auth_lifetime(void)
+{
+    CHECK(web_config_start() == ESP_OK);
+    char code[sizeof(s_access_code)], old_session[80];
+    strcpy(code, web_config_access_code());
+    snprintf(old_session, sizeof(old_session), SESSION_COOKIE "=%s", s_session);
+    CHECK(strlen(code) == ACCESS_CODE_LEN && strspn(code, "0123456789") == ACCESS_CODE_LEN);
+    CHECK(httpd_stop(s_httpd) == ESP_OK);
+    s_httpd = NULL;
+    CHECK(web_config_start() == ESP_OK && !strcmp(code, web_config_access_code()));
+    httpd_req_t req = json_request("");
+    req.cookie = old_session;
+    CHECK(dispatch(&req, "/api/status", HTTP_GET) != ESP_OK);
+    CHECK(!strncmp(req.status, "401", 3));
+    CHECK(httpd_stop(s_httpd) == ESP_OK);
+    s_httpd = NULL;
+    strcpy(stored_code, "corrupt");
+    CHECK(web_config_start() != ESP_OK && !s_httpd && !web_config_access_code());
+    CHECK(route_count == 0);
+    return 0;
+}
+
+static int test_auth_rate_limit(void)
+{
+    CHECK(web_config_start() == ESP_OK);
+    for (unsigned i = 0; i < AUTH_ATTEMPTS; i++) {
+        httpd_req_t req = json_request("{\"code\":\"wrong\"}");
+        CHECK(dispatch(&req, "/api/unlock", HTTP_POST) != ESP_OK);
+        CHECK(!strncmp(req.status, "401", 3));
+    }
+    char body[64];
+    snprintf(body, sizeof(body), "{\"code\":\"%s\"}", s_access_code);
+    httpd_req_t req = json_request(body);
+    CHECK(dispatch(&req, "/api/unlock", HTTP_POST) != ESP_OK);
+    CHECK(!strncmp(req.status, "429", 3) && req.recv_calls == 0);
+    ticks += pdMS_TO_TICKS(AUTH_WINDOW_MS);
+    req = json_request(body);
+    CHECK(dispatch(&req, "/api/unlock", HTTP_POST) == ESP_OK && req.set_cookie[0]);
+    return 0;
+}
+
+static int test_settings_transaction(void)
+{
+    fail_settings = true;
+    httpd_req_t req = json_request("{\"volume\":99,\"mic_gain\":20,\"ptt_latch\":true}");
+    h_audio(&req);
+    CHECK(!strncmp(req.status, "500", 3) && g_settings.volume == 40);
+    CHECK(g_settings.mic_gain == 0 && !g_settings.ptt_latch && settings_writes == 0);
+    fail_settings = false;
+    change_volume_on_replace = 87;
+    req = json_request("settings:\n  username: imported\nchannels:\n  - name: New\n");
+    h_import_upload(&req);
+    CHECK(!strncmp(req.status, "200", 3));
+    CHECK(!strcmp(g_settings.username, "imported") && g_settings.volume == 87);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     if (argc != 2) return 2;
@@ -622,6 +729,10 @@ int main(int argc, char **argv)
     if (!strcmp(name, "xml-settings")) return test_settings_xml(false);
     if (!strcmp(name, "xml-empty-channels")) return test_settings_xml(true);
     if (!strcmp(name, "xml-malformed")) return test_malformed_xml();
+    if (!strcmp(name, "auth-boundary")) return test_auth_boundary();
+    if (!strcmp(name, "auth-lifetime")) return test_auth_lifetime();
+    if (!strcmp(name, "auth-rate-limit")) return test_auth_rate_limit();
+    if (!strcmp(name, "settings-transaction")) return test_settings_transaction();
     if (!strcmp(name, "xml-quoted-settings")) return test_xml_quoted_settings();
     if (!strcmp(name, "xml-large-valid")) return test_large_valid_xml();
     if (!strcmp(name, "yaml-capacity-one")) return test_yaml_capacity(1, false);
@@ -706,6 +817,25 @@ esp_err_t httpd_req_get_url_query_str(httpd_req_t *req, char *out, size_t size)
     return strlcpy(out, req->query, size) < size ? ESP_OK : ESP_ERR_HTTPD_RESULT_TRUNC;
 }
 
+static const char *request_header(httpd_req_t *req, const char *field)
+{
+    if (!strcasecmp(field, "Cookie")) return req->cookie;
+    if (!strcasecmp(field, "Origin")) return req->origin;
+    if (!strcasecmp(field, "Host")) return req->host;
+    return NULL;
+}
+size_t httpd_req_get_hdr_value_len(httpd_req_t *req, const char *field)
+{
+    const char *value = request_header(req, field);
+    return value ? strlen(value) : 0;
+}
+esp_err_t httpd_req_get_hdr_value_str(httpd_req_t *req, const char *field, char *out, size_t size)
+{
+    const char *value = request_header(req, field);
+    if (!value) return ESP_ERR_NOT_FOUND;
+    return strlcpy(out, value, size) < size ? ESP_OK : ESP_ERR_HTTPD_RESULT_TRUNC;
+}
+
 esp_err_t httpd_query_key_value(const char *query, const char *key, char *out, size_t size)
 {
     for (const char *p = query; p && *p; p = strchr(p, '&'), p = p ? p + 1 : NULL) {
@@ -735,6 +865,7 @@ esp_err_t httpd_resp_set_type(httpd_req_t *req, const char *type) {(void)req; (v
 esp_err_t httpd_resp_set_hdr(httpd_req_t *req, const char *name, const char *value)
 {
     if (!strcmp(name, "Connection") && !strcmp(value, "close")) req->close_header = true;
+    if (!strcmp(name, "Set-Cookie")) strlcpy(req->set_cookie, value, sizeof(req->set_cookie));
     return ESP_OK;
 }
 esp_err_t httpd_resp_send(httpd_req_t *req, const char *data, ssize_t size)
@@ -749,15 +880,28 @@ esp_err_t httpd_resp_sendstr(httpd_req_t *req, const char *data) {return httpd_r
 esp_err_t httpd_resp_send_500(httpd_req_t *req) {return httpd_resp_set_status(req, "500 Internal Server Error");}
 esp_err_t httpd_resp_send_chunk(httpd_req_t *req, const char *data, ssize_t size)
 {
-    (void)req; (void)data; (void)size; return ESP_OK;
+    if (size < 0) size = strlen(data);
+    size_t used = strlen(req->response);
+    if (used + size < sizeof(req->response)) {
+        if (size) memcpy(req->response + used, data, size);
+        req->response[used + size] = 0;
+    }
+    return ESP_OK;
 }
 esp_err_t httpd_start(httpd_handle_t *handle, const httpd_config_t *config)
 {
-    (void)handle; (void)config; return ESP_OK;
+    (void)config;
+    *handle = routes;
+    route_count = 0;
+    return ESP_OK;
 }
+esp_err_t httpd_stop(httpd_handle_t handle) {(void)handle; route_count = 0; return ESP_OK;}
 esp_err_t httpd_register_uri_handler(httpd_handle_t handle, const httpd_uri_t *uri)
 {
-    (void)handle; (void)uri; return ESP_OK;
+    (void)handle;
+    if (route_count >= sizeof(routes) / sizeof(routes[0])) return ESP_ERR_NO_MEM;
+    routes[route_count++] = *uri;
+    return ESP_OK;
 }
 
 size_t channel_list_count(void) {return saved_count;}
@@ -819,6 +963,7 @@ esp_err_t channel_list_set_favorite(const char *name, bool favorite)
 esp_err_t channel_list_replace(const channel_entry_t *entries, size_t count, size_t *out)
 {
     if (!count) return ESP_ERR_NOT_FOUND;
+    if (change_volume_on_replace) g_settings.volume = change_volume_on_replace;
     memcpy(saved, entries, count * sizeof(*saved));
     saved_count = count;
     if (out) *out = count;
@@ -848,6 +993,43 @@ void vTaskDelay(TickType_t delay) {ticks += delay;}
 void vTaskDelete(void *handle) {(void)handle;}
 TickType_t xTaskGetTickCount(void) {return ticks;}
 esp_err_t settings_save(void) {settings_writes++; return ESP_OK;}
+void settings_get(settings_t *out) {*out = g_settings;}
+esp_err_t settings_update(settings_update_cb_t update, void *ctx)
+{
+    settings_t next = g_settings;
+    esp_err_t err = update(&next, ctx);
+    if (err == ESP_OK && fail_settings) err = ESP_FAIL;
+    if (err == ESP_OK) {settings_writes++; g_settings = next;}
+    return err;
+}
+void esp_fill_random(void *out, size_t size)
+{
+    static uint8_t sequence;
+    uint8_t *p = out;
+    while (size--) *p++ = sequence++;
+}
+esp_err_t nvs_open(const char *ns, int mode, nvs_handle_t *handle)
+{
+    (void)ns; (void)mode; *handle = 1;
+    return fail_auth_storage ? ESP_FAIL : ESP_OK;
+}
+void nvs_close(nvs_handle_t handle) {(void)handle;}
+esp_err_t nvs_get_str(nvs_handle_t h, const char *key, char *out, size_t *size)
+{
+    (void)h; (void)key;
+    if (!stored_code[0]) return ESP_ERR_NVS_NOT_FOUND;
+    size_t len = strlen(stored_code) + 1;
+    if (*size < len) return ESP_ERR_NVS_INVALID_LENGTH;
+    memcpy(out, stored_code, len); *size = len;
+    return ESP_OK;
+}
+esp_err_t nvs_set_str(nvs_handle_t h, const char *key, const char *value)
+{
+    (void)h; (void)key;
+    strlcpy(stored_code, value, sizeof(stored_code));
+    return ESP_OK;
+}
+esp_err_t nvs_commit(nvs_handle_t h) {(void)h; return ESP_OK;}
 void audio_set_volume(int volume) {(void)volume;}
 void audio_set_mic_gain(int gain) {(void)gain;}
 void zello_reconfigure(void) {}

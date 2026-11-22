@@ -19,6 +19,8 @@
 #endif
 
 esp_err_t web_config_start(void);
+// Local display only; never included in HTTP responses or settings backups.
+const char *web_config_access_code(void);
 
 // The newest backup at the root of the microSD card (scheff-zello-backup*.yaml
 // or .yml, or an old zello-p4-backup*.xml), for the device to offer during

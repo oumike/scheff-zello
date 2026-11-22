@@ -11,6 +11,7 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <unistd.h>
 #include "esp_http_server.h"
 #include "esp_log.h"
@@ -22,6 +23,9 @@ static const char *TAG = "httpd";
 
 struct httpd_server {
     int listen_fd;
+    int client_fd;
+    bool stopping;
+    pthread_mutex_t lock;
     unsigned recv_timeout_s;
     httpd_uri_t *uris;
     size_t n_uris, max_uris;
@@ -33,6 +37,7 @@ typedef struct {
     char pre[MAX_HEAD];  // body bytes that came in with the headers
     size_t pre_len, pre_off;
     size_t body_left;
+    const char *headers;
     const char *status, *type;
     const char *hdr_k[MAX_RESP_HDRS], *hdr_v[MAX_RESP_HDRS];
     int n_hdr;
@@ -47,8 +52,8 @@ static int send_all(conn_t *c, const char *buf, size_t len)
 #else
         ssize_t n = send(c->fd, buf, len, 0);
 #endif
-        if (n < 0) {
-            if (errno == EINTR) continue;
+        if (n <= 0) {
+            if (n < 0 && errno == EINTR) continue;
             c->failed = true;
             return -1;
         }
@@ -56,6 +61,49 @@ static int send_all(conn_t *c, const char *buf, size_t len)
         len -= (size_t)n;
     }
     return 0;
+}
+
+static const char *header_value(httpd_req_t *r, const char *field, size_t *size)
+{
+    const conn_t *c = r->aux;
+    size_t field_len = strlen(field);
+    const char *line = c->headers ? strstr(c->headers, "\r\n") : NULL;
+    while (line) {
+        line += 2;
+        const char *end = strstr(line, "\r\n");
+        if (!end) end = line + strlen(line);
+        if ((size_t)(end - line) > field_len && line[field_len] == ':' &&
+            !strncasecmp(line, field, field_len)) {
+            const char *value = line + field_len + 1;
+            while (value < end && (*value == ' ' || *value == '\t')) value++;
+            while (end > value && (end[-1] == ' ' || end[-1] == '\t')) end--;
+            *size = (size_t)(end - value);
+            return value;
+        }
+        line = *end ? end : NULL;
+    }
+    *size = 0;
+    return NULL;
+}
+
+size_t httpd_req_get_hdr_value_len(httpd_req_t *r, const char *field)
+{
+    if (!r || !r->aux || !field) return 0;
+    size_t size;
+    header_value(r, field, &size);
+    return size;
+}
+
+esp_err_t httpd_req_get_hdr_value_str(httpd_req_t *r, const char *field, char *buf, size_t len)
+{
+    if (!r || !r->aux || !field || !buf || !len) return ESP_ERR_INVALID_ARG;
+    size_t size;
+    const char *value = header_value(r, field, &size);
+    if (!value) return ESP_ERR_NOT_FOUND;
+    size_t copy = size < len - 1 ? size : len - 1;
+    memcpy(buf, value, copy);
+    buf[copy] = 0;
+    return size < len ? ESP_OK : ESP_ERR_HTTPD_RESULT_TRUNC;
 }
 
 static int send_head(conn_t *c, long content_len)
@@ -207,6 +255,13 @@ static int parse_method(const char *m)
     return -1;
 }
 
+static int64_t monotonic_ms(void)
+{
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (int64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+}
+
 static void handle_conn(struct httpd_server *s, int fd)
 {
     struct timeval tv = {.tv_sec = s->recv_timeout_s, .tv_usec = 0};
@@ -225,9 +280,21 @@ static void handle_conn(struct httpd_server *s, int fd)
     char head[MAX_HEAD + 1];
     size_t got = 0;
     char *end = NULL;
+    int64_t deadline = monotonic_ms() + (int64_t)s->recv_timeout_s * 1000;
     while (!end) {
         if (got >= MAX_HEAD) {
             send_plain_error(c, "431 Request Header Fields Too Large", "Header fields are too long");
+            goto out;
+        }
+        int64_t remaining = deadline - monotonic_ms();
+        struct pollfd input = {.fd = fd, .events = POLLIN};
+        int ready = remaining > 0 ? poll(&input, 1, (int)remaining) : 0;
+        if (ready == 0) {
+            send_plain_error(c, "408 Request Timeout", "Request headers timed out");
+            goto out;
+        }
+        if (ready < 0) {
+            if (errno == EINTR) continue;
             goto out;
         }
         ssize_t n = recv(fd, head + got, MAX_HEAD - got, 0);
@@ -239,7 +306,12 @@ static void handle_conn(struct httpd_server *s, int fd)
         head[got] = 0;
         end = strstr(head, "\r\n\r\n");
     }
+    if (monotonic_ms() >= deadline) {
+        send_plain_error(c, "408 Request Timeout", "Request headers timed out");
+        goto out;
+    }
     *end = 0;
+    c->headers = head;
     size_t head_len = (size_t)(end - head) + 4;
     c->pre_len = got - head_len;
     memcpy(c->pre, head + head_len, c->pre_len);
@@ -269,6 +341,7 @@ static void handle_conn(struct httpd_server *s, int fd)
     size_t path_len = strcspn(uri, "?");
     const httpd_uri_t *match = NULL;
     bool path_found = false;
+    pthread_mutex_lock(&s->lock);
     for (size_t i = 0; i < s->n_uris; i++) {
         const httpd_uri_t *u = &s->uris[i];
         if (strlen(u->uri) != path_len || strncmp(u->uri, uri, path_len)) continue;
@@ -277,6 +350,7 @@ static void handle_conn(struct httpd_server *s, int fd)
             match = u;
             break;
         }
+        pthread_mutex_unlock(&s->lock);
     }
     if (!match) {
         if (path_found) send_plain_error(c, "405 Method Not Allowed", "Request method for this URI is not handled by server");
@@ -297,7 +371,10 @@ out:
         for (int i = 0; i < 8 && poll(&p, 1, 100) > 0; i++)
             if (recv(fd, sink, sizeof(sink), 0) <= 0) break;
     }
+    pthread_mutex_lock(&s->lock);
+    if (s->client_fd == fd) s->client_fd = -1;
     close(fd);
+    pthread_mutex_unlock(&s->lock);
     free(c);
     free(req);
 }
@@ -306,6 +383,14 @@ static void *server_thread(void *arg)
 {
     struct httpd_server *s = arg;
     for (;;) {
+        pthread_mutex_lock(&s->lock);
+        bool stopping = s->stopping;
+        pthread_mutex_unlock(&s->lock);
+        if (stopping) break;
+        struct pollfd listener = {.fd = s->listen_fd, .events = POLLIN};
+        int ready = poll(&listener, 1, 250);
+        if (ready == 0 || (ready < 0 && errno == EINTR)) continue;
+        if (ready < 0) break;
         int fd = accept(s->listen_fd, NULL, NULL);
         if (fd >= 0) fcntl(fd, F_SETFD, FD_CLOEXEC);
         if (fd < 0) {
@@ -314,6 +399,14 @@ static void *server_thread(void *arg)
             usleep(100000);
             continue;
         }
+        pthread_mutex_lock(&s->lock);
+        if (s->stopping) {
+            close(fd);
+            pthread_mutex_unlock(&s->lock);
+            break;
+        }
+        s->client_fd = fd;
+        pthread_mutex_unlock(&s->lock);
         handle_conn(s, fd);
     }
     return NULL;
@@ -323,6 +416,11 @@ esp_err_t httpd_start(httpd_handle_t *handle, const httpd_config_t *config)
 {
     struct httpd_server *s = calloc(1, sizeof(*s));
     if (!s) return ESP_ERR_NO_MEM;
+    if (pthread_mutex_init(&s->lock, NULL) != 0) {
+        free(s);
+        return ESP_FAIL;
+    }
+    s->client_fd = -1;
     s->max_uris = config->max_uri_handlers;
     s->uris = calloc(s->max_uris ? s->max_uris : 1, sizeof(httpd_uri_t));
     s->recv_timeout_s = config->recv_wait_timeout ? config->recv_wait_timeout : 5;
@@ -355,6 +453,7 @@ esp_err_t httpd_start(httpd_handle_t *handle, const httpd_config_t *config)
 fail:
     if (fd >= 0) close(fd);
     free(s->uris);
+    pthread_mutex_destroy(&s->lock);
     free(s);
     return ESP_FAIL;
 }
@@ -362,10 +461,15 @@ fail:
 esp_err_t httpd_stop(httpd_handle_t s)
 {
     if (!s) return ESP_ERR_INVALID_ARG;
+    pthread_mutex_lock(&s->lock);
+    s->stopping = true;
     shutdown(s->listen_fd, SHUT_RDWR);
-    close(s->listen_fd);
+    if (s->client_fd >= 0) shutdown(s->client_fd, SHUT_RDWR);
+    pthread_mutex_unlock(&s->lock);
     pthread_join(s->thread, NULL);
+    close(s->listen_fd);
     free(s->uris);
+    pthread_mutex_destroy(&s->lock);
     free(s);
     return ESP_OK;
 }
@@ -373,7 +477,9 @@ esp_err_t httpd_stop(httpd_handle_t s)
 esp_err_t httpd_register_uri_handler(httpd_handle_t s, const httpd_uri_t *uri)
 {
     if (!s || !uri) return ESP_ERR_INVALID_ARG;
-    if (s->n_uris >= s->max_uris) return ESP_ERR_NO_MEM;
-    s->uris[s->n_uris++] = *uri;
-    return ESP_OK;
+    pthread_mutex_lock(&s->lock);
+    esp_err_t err = s->n_uris >= s->max_uris ? ESP_ERR_NO_MEM : ESP_OK;
+    if (err == ESP_OK) s->uris[s->n_uris++] = *uri;
+    pthread_mutex_unlock(&s->lock);
+    return err;
 }

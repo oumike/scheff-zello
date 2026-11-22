@@ -1,5 +1,6 @@
 #include "settings.h"
 
+#include <assert.h>
 #include <errno.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -7,6 +8,8 @@
 #include <string.h>
 #include <strings.h>
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "sdkconfig.h"
@@ -18,6 +21,7 @@
 static const char *TAG = "settings";
 
 settings_t g_settings;
+static SemaphoreHandle_t s_lock;
 
 typedef enum { F_STR, F_BOOL, F_U8 } ftype_t;
 
@@ -102,7 +106,7 @@ static void set_defaults(settings_t *s)
     s->ptt_latch = false;
 }
 
-esp_err_t settings_load(void)
+static esp_err_t load_settings(void)
 {
     esp_err_t err = nvs_flash_init();
     if (err != ESP_OK) return err;
@@ -157,31 +161,61 @@ esp_err_t settings_load(void)
     return err;
 }
 
-esp_err_t settings_save(void)
+esp_err_t settings_load(void)
 {
-    if (!valid_settings(&g_settings)) return ESP_ERR_INVALID_ARG;
+    // Startup initializes the lock before any UI or network tasks run.
+    if (!s_lock) s_lock = xSemaphoreCreateMutex();
+    if (!s_lock) return ESP_ERR_NO_MEM;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    esp_err_t err = load_settings();
+    xSemaphoreGive(s_lock);
+    return err;
+}
+
+void settings_get(settings_t *out)
+{
+    assert(s_lock && out);
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    *out = g_settings;
+    xSemaphoreGive(s_lock);
+}
+
+esp_err_t settings_update(settings_update_cb_t update, void *ctx)
+{
+    if (!s_lock) return ESP_ERR_INVALID_STATE;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
     snapshot_t snapshot = {
         .version = SNAPSHOT_VERSION,
         .size = sizeof(settings_t),
         .values = g_settings,
     };
-    esp_err_t err = save_snapshot(&snapshot);
+    esp_err_t err = update ? update(&snapshot.values, ctx) : ESP_OK;
+    if (err == ESP_OK && !valid_settings(&snapshot.values)) err = ESP_ERR_INVALID_ARG;
+    if (err == ESP_OK) err = save_snapshot(&snapshot);
+    if (err == ESP_OK) g_settings = snapshot.values;
     memset(&snapshot, 0, sizeof(snapshot));
+    xSemaphoreGive(s_lock);
+    if (err != ESP_OK) ESP_LOGE(TAG, "settings update failed: %s", esp_err_to_name(err));
     return err;
 }
 
-esp_err_t settings_set(const char *key, const char *value)
+esp_err_t settings_save(void)
 {
-    if (!key || !value) return ESP_ERR_INVALID_ARG;
+    return settings_update(NULL, NULL);
+}
+
+esp_err_t settings_set_field(settings_t *values, const char *key, const char *value)
+{
+    if (!values || !key || !value) return ESP_ERR_INVALID_ARG;
     // "network" takes the name as well as the number, since that is what the
     // console and the web config both have to hand.
     if (!strcmp(key, "network")) {
         if (!strcasecmp(value, "consumer") || !strcmp(value, "0")) {
-            g_settings.network = ZELLO_NET_CONSUMER;
+            values->network = ZELLO_NET_CONSUMER;
             return ESP_OK;
         }
         if (!strcasecmp(value, "work") || !strcmp(value, "1")) {
-            g_settings.network = ZELLO_NET_WORK;
+            values->network = ZELLO_NET_WORK;
             return ESP_OK;
         }
         return ESP_ERR_INVALID_ARG;
@@ -190,7 +224,7 @@ esp_err_t settings_set(const char *key, const char *value)
     for (size_t i = 0; i < NFIELDS; i++) {
         const field_t *f = &FIELDS[i];
         if (strcmp(f->key, key) != 0) continue;
-        void *p = (char *)&g_settings + f->off;
+        void *p = (char *)values + f->off;
         switch (f->type) {
         case F_STR:
             if (strlen(value) >= f->size) return ESP_ERR_INVALID_ARG;
@@ -215,13 +249,36 @@ esp_err_t settings_set(const char *key, const char *value)
     return ESP_ERR_NOT_FOUND;
 }
 
+esp_err_t settings_set(const char *key, const char *value)
+{
+    if (!s_lock) return ESP_ERR_INVALID_STATE;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    esp_err_t err = settings_set_field(&g_settings, key, value);
+    xSemaphoreGive(s_lock);
+    return err;
+}
+
+static esp_err_t store_field(settings_t *values, void *ctx)
+{
+    const char *const *args = ctx;
+    return settings_set_field(values, args[0], args[1]);
+}
+
+esp_err_t settings_store(const char *key, const char *value)
+{
+    const char *args[] = {key, value};
+    return settings_update(store_field, args);
+}
+
 void settings_print(void)
 {
+    settings_t settings;
+    settings_get(&settings);
     for (size_t i = 0; i < NFIELDS; i++) {
         const field_t *f = &FIELDS[i];
-        const void *p = (const char *)&g_settings + f->off;
+        const void *p = (const char *)&settings + f->off;
         if (!strcmp(f->key, "network")) {
-            printf("  %-16s %s\n", f->key, g_settings.network == ZELLO_NET_WORK ? "work" : "consumer");
+            printf("  %-16s %s\n", f->key, settings.network == ZELLO_NET_WORK ? "work" : "consumer");
             continue;
         }
         switch (f->type) {
@@ -241,9 +298,11 @@ void settings_print(void)
 
 void settings_ws_url(char *buf, size_t size)
 {
+    xSemaphoreTake(s_lock, portMAX_DELAY);
     if (g_settings.network == ZELLO_NET_WORK && g_settings.work_network[0]) {
         snprintf(buf, size, "wss://zellowork.io/ws/%s", g_settings.work_network);
     } else {
         snprintf(buf, size, "wss://zello.io/ws");
     }
+    xSemaphoreGive(s_lock);
 }
