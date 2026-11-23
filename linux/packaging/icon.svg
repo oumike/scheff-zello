@@ -298,5 +298,7 @@
     <path d="M31.48 32.54 Q29.47 30.71 28.44 28.58 Q30.61 29.52 32.52 31.46 Z" fill="#fffdf2" stroke="#e8dcc0" stroke-width="0.24"/>
     <path d="M31.36 32.40 Q29.63 29.74 28.96 27.11 Q31.03 28.87 32.64 31.60 Z" fill="#fffdf2" stroke="#e8dcc0" stroke-width="0.24"/>
     <path d="M31.29 32.24 Q30.19 29.25 30.12 26.51 Q31.75 28.71 32.71 31.76 Z" fill="#fffdf2" stroke="#e8dcc0" stroke-width="0.24"/>
+    <path d="M51.6 52.4 H61.2 L51.6 61.2 H61.2" fill="none" stroke="#1b2a22" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M51.6 52.4 H61.2 L51.6 61.2 H61.2" fill="none" stroke="#ffffff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
   </g>
 </svg>
