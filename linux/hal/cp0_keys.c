@@ -3,7 +3,8 @@
 // shift, the sym layer, and the printed fn layer). On the LCD the device isn't
 // grabbed, so the launcher still sees a long Esc; in a desktop window it is
 // grabbed while the window has focus, so the desktop doesn't get the keys too.
-// The simulator feeds SDL's keys in as the same evdev codes.
+// The desktop's own keyboards (any keyboard in the simulator) arrive through
+// SDL already laid out, and skip the keymap: cp0_keys_push().
 
 #include <pthread.h>
 #include <stdatomic.h>
@@ -94,10 +95,15 @@ uint32_t hal_now_ms(void)
     return (uint32_t)((uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u);
 }
 
-void cp0_keys_feed(uint16_t code, uint8_t value, uint32_t ms)
+// Keys from the window, ready to hand out as they are.
+#define READY_LEN 128
+static cp0_key_event_t s_ready[READY_LEN];
+static unsigned s_ready_head, s_ready_len;
+
+void cp0_keys_push(uint32_t key, bool down)
 {
     pthread_mutex_lock(&s_raw_lock);
-    if (s_raw_len < RAW_LEN) s_raw[(s_raw_head + s_raw_len++) % RAW_LEN] = (raw_key_t){code, value, 0, ms};
+    if (s_ready_len < READY_LEN) s_ready[(s_ready_head + s_ready_len++) % READY_LEN] = (cp0_key_event_t){key, down};
     pthread_mutex_unlock(&s_raw_lock);
 }
 
@@ -312,6 +318,15 @@ static bool feed(const raw_key_t *in, cp0_key_event_t *out)
 
 bool cp0_keys_next(cp0_key_event_t *ev)
 {
+    pthread_mutex_lock(&s_raw_lock);
+    bool ready = s_ready_len > 0;
+    if (ready) {
+        *ev = s_ready[s_ready_head];
+        s_ready_head = (s_ready_head + 1) % READY_LEN;
+        s_ready_len--;
+    }
+    pthread_mutex_unlock(&s_raw_lock);
+    if (ready) return true;
     for (;;) {
         raw_key_t in;
         pthread_mutex_lock(&s_raw_lock);

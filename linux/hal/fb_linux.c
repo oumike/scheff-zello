@@ -24,8 +24,8 @@ static const char *TAG = "fb";
 #define PANEL_H   170
 #define INSET_X   2
 #define INSET_TOP 2
-#define UI_W      DISPLAY_H_RES
-#define UI_H      DISPLAY_V_RES
+#define UI_W      DISPLAY_LCD_H_RES
+#define UI_H      DISPLAY_LCD_V_RES
 
 static pthread_mutex_t s_lock = PTHREAD_MUTEX_INITIALIZER;
 static int s_fd = -1;

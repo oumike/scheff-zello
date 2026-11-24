@@ -46,7 +46,12 @@ static const char *TAG = "saver";
 #define PLANT 150
 #define BOX_W 460
 #define STEP  2
-#elif CONFIG_IDF_TARGET_ESP32S3 || CONFIG_ZELLO_BOARD_CARDPUTER_ZERO
+#elif CONFIG_ZELLO_BOARD_CARDPUTER_ZERO
+// The LCD's size, or the Tanmatsu's in a desktop window.
+#define PLANT UI_DESK(150, 72)
+#define BOX_W UI_DESK(460, 200)
+#define STEP  UI_DESK(2, 1)
+#elif CONFIG_IDF_TARGET_ESP32S3
 #define PLANT 72
 #define BOX_W 200
 #define STEP  1
@@ -61,7 +66,7 @@ static volatile saver_state_t s_state;
 
 static lv_obj_t *s_overlay, *s_box, *s_status;
 static uint32_t s_since;  // when the screensaver last lit
-static int32_t s_x, s_y, s_dx = STEP, s_dy = STEP;
+static int32_t s_x, s_y, s_dx, s_dy;  // set by the first show()
 static uint32_t s_ticks;
 static char s_status_cache[160];
 
@@ -160,7 +165,7 @@ static void show(const char *why)
 
     s_overlay = lv_obj_create(lv_layer_top());
     lv_obj_remove_style_all(s_overlay);
-    lv_obj_set_size(s_overlay, DISPLAY_H_RES, DISPLAY_V_RES);
+    lv_obj_set_size(s_overlay, LV_PCT(100), LV_PCT(100));
     lv_obj_set_style_bg_color(s_overlay, UI_COLOR_BG, 0);
     lv_obj_set_style_bg_opa(s_overlay, LV_OPA_COVER, 0);
     // Taps land here and go no further.
@@ -186,6 +191,7 @@ static void show(const char *why)
     s_x = (DISPLAY_H_RES - BOX_W) / 2;
     s_y = (DISPLAY_V_RES - lv_obj_get_height(s_box)) / 2;
     lv_obj_set_pos(s_box, s_x, s_y);
+    if (!s_dx) s_dx = s_dy = STEP;
 
     s_state = SAVER_ON;
     s_since = lv_tick_get();
@@ -345,7 +351,8 @@ static void tick(lv_timer_t *t)
     if (s_state == SAVER_OFF) {
         // Transmitting (on a button LVGL doesn't see) is using the device.
         if (zello_ptt()) lv_display_trigger_activity(NULL);
-        if (onboard_complete() && lv_display_get_inactive_time(NULL) >= IDLE_MS) show("idle");
+        // A desktop window leaves idling to the desktop's own screensaver.
+        if (!UI_DESKTOP && onboard_complete() && lv_display_get_inactive_time(NULL) >= IDLE_MS) show("idle");
         return;
     }
 

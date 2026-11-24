@@ -14,9 +14,16 @@
 #define DISPLAY_H_RES 800
 #define DISPLAY_V_RES 480
 #elif CONFIG_ZELLO_BOARD_CARDPUTER_ZERO
-// The 320x170 panel less the 2 px its bezel covers on the left, right and top.
-#define DISPLAY_H_RES 316
-#define DISPLAY_V_RES 168
+// The 320x170 panel less the 2 px its bezel covers on the left, right and top;
+// in a desktop window, the window's size, which changes as it is resized.
+#define DISPLAY_LCD_H_RES 316
+#define DISPLAY_LCD_V_RES 168
+int32_t display_h_res(void);
+int32_t display_v_res(void);
+// True when drawing into a desktop window rather than onto the LCD.
+bool display_windowed(void);
+#define DISPLAY_H_RES display_h_res()
+#define DISPLAY_V_RES display_v_res()
 #elif CONFIG_ZELLO_BOARD_TAB5
 // 5" LCD (720x1280 portrait, MIPI-DSI): ST7123, ST7121 or ILI9881C.
 #define DISPLAY_H_RES 720

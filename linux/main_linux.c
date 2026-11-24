@@ -30,7 +30,6 @@
 
 static const char *TAG = "main";
 
-#define WINDOW_SCALE 3
 #define DESKTOP_ENTRY_SRC "/usr/share/scheff-zello/scheff-zello.desktop"
 
 static atomic_bool s_quit;
@@ -182,7 +181,7 @@ int main(int argc, char **argv)
     bool window = want_window();
     hal_display_choose(window);
     if (window) {
-        if (!sdlwin_open(DISPLAY_H_RES, DISPLAY_V_RES, WINDOW_SCALE, "Scheff Zello")) return 1;
+        if (!sdlwin_open("Scheff Zello")) return 1;
     } else if (!fb_open()) {
         return 1;
     }

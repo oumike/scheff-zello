@@ -133,11 +133,19 @@ implemented; it has not yet been through a long soak test on hardware.
   latching talk setting). The fn
   layer gives arrows (fn+F/X/Z/C), volume (fn+S/D) and brightness (fn+U/I).
   Tap **Esc** to go back; **hold Esc** for 3 s to quit.
+- In a window it is a desktop app: the window resizes (the layout reflows,
+  with channel activity and the message field on the home screen) and
+  remembers its size and position (`window.conf`). The mouse clicks,
+  scrolls with the wheel and highlights what it is over. A regular keyboard
+  types as usual: hold Space to talk, Esc goes back, Tab/arrows move,
+  Ctrl/Cmd+Up/Down change the volume, Ctrl/Cmd+V pastes, F11 toggles
+  fullscreen and Ctrl/Cmd+Q (or closing the window) quits. The built-in
+  keyboard keeps its fn layer. There is no idle screensaver in a window.
 - Wi-Fi belongs to the OS: connect in the system settings, and the app signs
   in once the network is up. The web config is served on port **8960** of the
   device's address.
-- Channel activity and the message field have a **Chat** screen of their own,
-  opened from the button on the home screen.
+- Channel activity and the message field have a **Chat** screen of their own
+  on the LCD, opened from the button on the home screen.
 - Audio goes through SDL; the volume is the system's (ALSA mixer). A USB
   headset's microphone is preferred over the built-in one and can be plugged
   in while the app runs.
@@ -213,7 +221,8 @@ Plain `idf.py build` against an ESP-IDF v5.5.4+ checkout works too.
 The device build runs in a Debian trixie arm64 container
 (`linux/docker/Dockerfile`), so it needs Docker but no cross toolchain. The
 simulator needs CMake, Ninja, pkg-config and SDL2, Opus, libcurl and cJSON
-(Homebrew on macOS), and runs as `linux/build/sim/scheff-zello`.
+(Homebrew on macOS), and runs as `linux/build/sim/scheff-zello` in the same
+resizable window as the device's desktop mode.
 
 ### CI and releases
 

@@ -16,37 +16,43 @@
 
 // CardputerZero: a 320x170 LCD (316x168 inside the bezel) above a keyboard.
 // The T-Deck's landscape layout and fonts, tightened for 70 fewer rows.
-#define UI_PAD    3
-#define UI_GAP    2
-#define UI_BTN_H  22
-#define UI_FIELD_H 22
-#define UI_RADIUS 4
+// In a desktop window (the same binary, or the simulator) the screen is the
+// window, at any size: the Tanmatsu's sizes instead, chosen at start-up.
+#define UI_DESKTOP display_windowed()
+#define UI_DESK(desktop, lcd) (UI_DESKTOP ? (desktop) : (lcd))
+#define UI_PAD    UI_DESK(8, 3)
+#define UI_GAP    UI_DESK(8, 2)
+#define UI_BTN_H  UI_DESK(44, 22)
+#define UI_FIELD_H UI_DESK(40, 22)
+#define UI_RADIUS UI_DESK(8, 4)
 #define UI_SAFE_TOP    0
 #define UI_SAFE_BOTTOM 0
 
-#define UI_FONT_SMALL (&lv_font_montserrat_12)
-#define UI_FONT       (&lv_font_montserrat_14)
-#define UI_FONT_TITLE (&lv_font_montserrat_16)
-#define UI_STATUS_BAR_W     100
-#define UI_STATUS_BAR_H     16
-#define UI_SPINNER_SIZE     24
-#define UI_ICON_BUTTON_SIZE 20
-#define UI_EDIT_BUTTON_H    18
-#define UI_CLEAR_BUTTON_W   22
-#define UI_TALK_BUTTON_H    26
-#define UI_SLIDER_H         6
-#define UI_VOLUME_VALUE_W   34
-#define UI_VOLUME_PAD       2
-#define UI_METER_H          4
-#define UI_ZELLO_ICON_DIV   2
+#define UI_FONT_SMALL UI_DESK(&lv_font_montserrat_16, &lv_font_montserrat_12)
+#define UI_FONT       UI_DESK(&lv_font_montserrat_20, &lv_font_montserrat_14)
+#define UI_FONT_TITLE UI_DESK(&lv_font_montserrat_28, &lv_font_montserrat_16)
+#define UI_STATUS_BAR_W     UI_DESK(190, 100)
+#define UI_STATUS_BAR_H     UI_DESK(32, 16)
+#define UI_SPINNER_SIZE     UI_DESK(48, 24)
+#define UI_ICON_BUTTON_SIZE UI_DESK(40, 20)
+#define UI_EDIT_BUTTON_H    UI_DESK(36, 18)
+#define UI_CLEAR_BUTTON_W   UI_DESK(40, 22)
+#define UI_TALK_BUTTON_H    UI_DESK(70, 26)
+#define UI_SLIDER_H         UI_DESK(16, 6)
+#define UI_VOLUME_VALUE_W   UI_DESK(52, 34)
+#define UI_VOLUME_PAD       UI_DESK(2 * UI_PAD, 2)
+#define UI_METER_H          UI_DESK(12, 4)
+#define UI_ZELLO_ICON_DIV   UI_DESK(1, 2)
 
 #define UI_LANDSCAPE    1
 #define UI_HAS_KEYBOARD 1
 // The OS joins Wi-Fi networks; the app only uses the connection.
 #define UI_OS_WIFI      1
-// Too short for the activity log and message line beside the talk controls:
-// they get a Chat screen of their own, opened from Home's header.
-#define UI_CHAT_SCREEN  1
+// The LCD is too short for the activity log and message line beside the talk
+// controls: they get a Chat screen of their own, opened from Home's header.
+// A desktop window has the room to keep them on Home.
+#define UI_CHAT_SCREEN_BUILT 1
+#define UI_CHAT_SCREEN  (!UI_DESKTOP)
 
 #elif CONFIG_ZELLO_BOARD_TANMATSU
 
@@ -175,6 +181,15 @@
 #endif
 #ifndef UI_CHAT_SCREEN
 #define UI_CHAT_SCREEN 0
+#endif
+// Whether the Chat screen's code is compiled in; UI_CHAT_SCREEN says whether
+// it is used, which on the CardputerZero is decided at run time.
+#ifndef UI_CHAT_SCREEN_BUILT
+#define UI_CHAT_SCREEN_BUILT UI_CHAT_SCREEN
+#endif
+// A desktop window: the CardputerZero app's or the simulator's.
+#ifndef UI_DESKTOP
+#define UI_DESKTOP 0
 #endif
 #ifndef UI_HOME_HEADER_FONT
 #define UI_HOME_HEADER_FONT UI_FONT

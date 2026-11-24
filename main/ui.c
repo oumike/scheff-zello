@@ -35,15 +35,15 @@ static const char *battery_symbol(uint8_t percent)
 
 // The Zello link as an up and a down arrow, drawn as lines since the symbol
 // font has no such glyph. Each arrow is one polyline: shaft, then the head
-// traced out and back from the tip.
-#define D UI_ZELLO_ICON_DIV
+// traced out and back from the tip, at full size: UI_ZELLO_ICON_DIV divides
+// it.
 #define ZELLO_ICON_W (24 / UI_ZELLO_ICON_DIV)
 #define ZELLO_ICON_H (28 / UI_ZELLO_ICON_DIV)
-static const lv_point_precise_t s_arrow_up[] = {{7 / D, 25 / D}, {7 / D, 3 / D}, {1 / D, 9 / D}, {7 / D, 3 / D},
-                                                {13 / D, 9 / D}};
-static const lv_point_precise_t s_arrow_down[] = {{17 / D, 3 / D}, {17 / D, 25 / D}, {11 / D, 19 / D},
-                                                  {17 / D, 25 / D}, {23 / D, 19 / D}};
-#undef D
+static const lv_point_precise_t s_arrow_shapes[2][5] = {
+    {{7, 25}, {7, 3}, {1, 9}, {7, 3}, {13, 9}},
+    {{17, 3}, {17, 25}, {11, 19}, {17, 25}, {23, 19}},
+};
+static lv_point_precise_t s_arrows[2][5];
 
 static lv_obj_t *zello_icon_create(lv_obj_t *parent)
 {
@@ -53,10 +53,13 @@ static lv_obj_t *zello_icon_create(lv_obj_t *parent)
     lv_obj_set_style_border_width(box, 0, 0);
     lv_obj_set_style_pad_all(box, 0, 0);
     lv_obj_remove_flag(box, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-    const lv_point_precise_t *const shapes[2] = {s_arrow_up, s_arrow_down};
     for (int i = 0; i < 2; i++) {
+        for (int j = 0; j < 5; j++) {
+            s_arrows[i][j].x = s_arrow_shapes[i][j].x / UI_ZELLO_ICON_DIV;
+            s_arrows[i][j].y = s_arrow_shapes[i][j].y / UI_ZELLO_ICON_DIV;
+        }
         lv_obj_t *line = lv_line_create(box);
-        lv_line_set_points(line, shapes[i], 5);
+        lv_line_set_points(line, s_arrows[i], 5);
         lv_obj_set_style_line_width(line, UI_ZELLO_ICON_DIV > 1 ? 2 : 3, 0);
         lv_obj_set_style_line_rounded(line, true, 0);
         s_zello_arrows[i] = line;
@@ -332,7 +335,13 @@ static lv_obj_t *modal_box(void)
     lv_obj_remove_flag(s_modal, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *box = lv_obj_create(s_modal);
-    lv_obj_set_size(box, DISPLAY_H_RES - 4 * UI_PAD, LV_SIZE_CONTENT);
+    if (UI_DESKTOP) {
+        // A window can be any size: follow it, but don't sprawl.
+        lv_obj_set_size(box, LV_PCT(90), LV_SIZE_CONTENT);
+        lv_obj_set_style_max_width(box, 560, 0);
+    } else {
+        lv_obj_set_size(box, DISPLAY_H_RES - 4 * UI_PAD, LV_SIZE_CONTENT);
+    }
     lv_obj_center(box);
     lv_obj_set_style_bg_color(box, UI_COLOR_PANEL, 0);
     lv_obj_set_style_radius(box, UI_RADIUS * 2, 0);

@@ -28,6 +28,9 @@
 #include "zello_client.h"
 #if CONFIG_ZELLO_BOARD_CARDPUTER_ZERO
 #include <unistd.h>
+#ifdef __APPLE__
+#include <sys/random.h>  // getentropy(), for the macOS simulator
+#endif
 #else
 #include "esp_random.h"
 #endif
