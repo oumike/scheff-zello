@@ -140,7 +140,8 @@ implemented; it has not yet been through a long soak test on hardware.
   types as usual: hold Space to talk, Esc goes back, Tab/arrows move,
   Ctrl/Cmd+Up/Down change the volume, Ctrl/Cmd+V pastes, F11 toggles
   fullscreen and Ctrl/Cmd+Q (or closing the window) quits. The built-in
-  keyboard keeps its fn layer. There is no idle screensaver in a window.
+  keyboard keeps its fn layer. The header leaves Wi-Fi and battery to the
+  desktop, and there is no idle screensaver in a window.
 - Wi-Fi belongs to the OS: connect in the system settings, and the app signs
   in once the network is up. The web config is served on port **8960** of the
   device's address.

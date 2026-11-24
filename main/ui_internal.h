@@ -31,7 +31,7 @@
 #define UI_FONT_SMALL UI_DESK(&lv_font_montserrat_16, &lv_font_montserrat_12)
 #define UI_FONT       UI_DESK(&lv_font_montserrat_20, &lv_font_montserrat_14)
 #define UI_FONT_TITLE UI_DESK(&lv_font_montserrat_28, &lv_font_montserrat_16)
-#define UI_STATUS_BAR_W     UI_DESK(190, 100)
+#define UI_STATUS_BAR_W     UI_DESK(32, 100)  // a window shows only the Zello link
 #define UI_STATUS_BAR_H     UI_DESK(32, 16)
 #define UI_SPINNER_SIZE     UI_DESK(48, 24)
 #define UI_ICON_BUTTON_SIZE UI_DESK(40, 20)

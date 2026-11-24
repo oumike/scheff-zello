@@ -103,7 +103,7 @@ static void status_update(lv_timer_t *timer)
             lv_obj_set_style_text_color(s_battery_icon, color, 0);
             lv_label_set_text_fmt(s_battery_pct, "%u%%", (unsigned)percent);
             lv_obj_set_style_text_color(s_battery_pct, color, 0);
-            lv_obj_remove_flag(s_battery_pct, LV_OBJ_FLAG_HIDDEN);
+            if (!UI_DESKTOP) lv_obj_remove_flag(s_battery_pct, LV_OBJ_FLAG_HIDDEN);
         }
     }
     s_battery_tick = (s_battery_tick + 1) % BATTERY_REFRESH_TICKS;
@@ -142,6 +142,12 @@ static void status_ensure(void)
         lv_label_set_text(s_battery_icon, LV_SYMBOL_BATTERY_EMPTY);
         lv_obj_set_style_text_font(s_battery_icon, UI_FONT, 0);
         lv_obj_set_style_text_color(s_battery_icon, UI_COLOR_MUTED, 0);
+
+        // The desktop around a window already shows the network and battery.
+        if (UI_DESKTOP) {
+            lv_obj_add_flag(s_wifi_icon, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_battery_icon, LV_OBJ_FLAG_HIDDEN);
+        }
 
         lv_obj_align(s_status_bar, LV_ALIGN_TOP_RIGHT, -UI_PAD, UI_SAFE_TOP + UI_PAD);
         status_update(NULL);
