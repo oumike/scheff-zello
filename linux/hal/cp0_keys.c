@@ -46,7 +46,7 @@ enum {
 
 #define REPEAT_DELAY_MS 500
 #define REPEAT_MS       70
-#define QUIT_HOLD_MS    3000
+#define QUIT_HOLD_MS    CP0_KEYS_QUIT_HOLD_MS
 #define MOD_SHIFT 1
 #define MOD_FN    2
 
@@ -116,6 +116,8 @@ static void feed_mods(uint16_t code, uint8_t value, uint8_t mods, uint32_t ms)
 
 void cp0_keys_set_focus(bool focused) { atomic_store(&s_focused, focused); }
 bool cp0_keys_quit_requested(void) { return atomic_load(&s_quit); }
+
+uint32_t cp0_keys_esc_held_ms(void) { return s_esc_down ? hal_now_ms() - s_esc_ms : 0; }
 
 // ---- the keymap ------------------------------------------------------------
 

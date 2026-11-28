@@ -1,6 +1,6 @@
 {
   "package_name": "scheff-zello",
-  "version": "3.0.0",
+  "version": "3.2.0",
   "app_name": "Scheff Zello",
   "bin_name": "scheff-zello",
   "description": "Zello push-to-talk client",

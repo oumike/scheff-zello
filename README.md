@@ -132,7 +132,7 @@ implemented; it has not yet been through a long soak test on hardware.
 - Keys: **hold Space** to talk on the home screen (or tap to toggle with the
   latching talk setting). The fn
   layer gives arrows (fn+F/X/Z/C), volume (fn+S/D) and brightness (fn+U/I).
-  Tap **Esc** to go back; **hold Esc** for 3 s to quit.
+  Tap **Esc** to go back; **hold Esc** for 3 s to quit (a ring counts it down on screen).
 - In a window it is a desktop app: the window resizes (the layout reflows,
   with channel activity and the message field on the home screen) and
   remembers its size and position (`window.conf`). The mouse clicks,

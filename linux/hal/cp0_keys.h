@@ -35,3 +35,7 @@ typedef struct {
 esp_err_t cp0_keys_start(void);
 // The next key, if any; never blocks.
 bool cp0_keys_next(cp0_key_event_t *ev);
+// How long Esc has been held (0 when it isn't), for the quit countdown; read
+// on the same thread as cp0_keys_next().
+uint32_t cp0_keys_esc_held_ms(void);
+#define CP0_KEYS_QUIT_HOLD_MS 3000

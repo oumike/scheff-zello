@@ -17,7 +17,7 @@ bool hal_windowed(void);
 // keymap.
 void cp0_keys_push(uint32_t key, bool down);
 void cp0_keys_set_focus(bool focused);  // window mode: the window has focus
-bool cp0_keys_quit_requested(void);     // Esc held for a second
+bool cp0_keys_quit_requested(void);     // Esc held for 3 seconds
 void cp0_keys_stop(void);
 
 // ---- the display (display_linux.c) ----
